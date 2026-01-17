@@ -181,6 +181,8 @@ POST /ovirt-engine/api/imagetransfers   (write mode)
 
 # Configuration Example
 
+Example **config.ini**
+
 ```
 [server]
 host = 0.0.0.0
