@@ -16,8 +16,8 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Skip auth for PKI services
-        if "/services/" in request.url.path:
+        # Skip auth for PKI services and OAuth endpoints
+        if "/services/" in request.url.path or "/sso/" in request.url.path:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")
@@ -29,7 +29,20 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         if auth_header.startswith("Basic "):
             raw_value = self._decode_basic(auth_header)
         elif auth_header.startswith("Bearer "):
-            raw_value = auth_header.strip()
+            # Handle OAuth Bearer token
+            token = auth_header[7:].strip()
+            from app.ovirtapi.oauth import get_token_info
+            token_info = get_token_info(token)
+
+            if not token_info:
+                logger.warning(f"Invalid or expired OAuth token")
+                raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+            # Store token info in request state
+            request.state.auth_hash = hash_auth(token)
+            request.state.token_info = token_info
+            logger.debug(f"OAuth token validated for user: {token_info.get('username')}")
+            return await call_next(request)
         else:
             logger.warning(f"Unsupported auth type for {request.method} {request.url.path}")
             raise HTTPException(status_code=401, detail="Unsupported auth type")
