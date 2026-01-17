@@ -190,12 +190,18 @@ async def oauth_token(
         logger.info(f"OAuth token generated for user: {username}")
 
         # Return OAuth token response
-        return {
+        data = {
             "access_token": access_token,
             "token_type": "Bearer",
             "expires_in": TOKEN_EXPIRY_HOURS * 3600,
             "scope": "ovirt-engine-api"
         }
+
+        # Convert the data to JSON with indentation
+        json_data = json.dumps(data, indent=4)
+
+        # Return the JSON data as a response
+        return Response(json_data, media_type='application/json')
 
     except HTTPException:
         raise
