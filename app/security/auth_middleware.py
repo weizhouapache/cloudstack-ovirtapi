@@ -31,7 +31,12 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         session = get_session(auth_hash)
         if session is None:
             # Login to CloudStack
-            session_data = await self._cloudstack_login(raw_value)
+            session_data = await self._cloudstack_login(request, raw_value)
+            # Store session data
+            store_session(auth_hash, session_data)
+            # Get User Keys
+            session_data = await self._cloudstack_get_userkeys(request, session_data)
+            # Update session data
             store_session(auth_hash, session_data)
 
         response = await call_next(request)
@@ -45,10 +50,10 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         decoded = base64.b64decode(b64_value).decode()
         return decoded  # Format: user@domain:password
 
-    async def _cloudstack_login(self, raw_value: str) -> dict:
+    async def _cloudstack_login(self, request: Request, raw_value: str) -> dict:
         """
         Calls CloudStack API login endpoint.
-        Returns session data: apikey, secretkey, userid
+        Returns session data: userid
         """
         try:
             username, password = raw_value.split(":", 1)
@@ -71,3 +76,30 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             raise HTTPException(status_code=401, detail="CloudStack authentication failed") from e
 
+    async def _cloudstack_get_userkeys(self, request: Request, session_data: dict) -> dict:
+        """
+        Given login session data (with sessionkey and userid),
+        fetch the permanent CloudStack API keys (apikey and secretkey)
+        and return updated session data.
+        """
+        if "sessionkey" not in session_data or "userid" not in session_data:
+            raise ValueError("session_data must include 'sessionkey' and 'userid'")
+
+        params = {
+            "id": session_data["userid"],
+            "sessionkey": session_data["sessionkey"],
+            "response": "json"
+        }
+
+        # CloudStack getUserKeys command
+        resp = await cs_request(request, "getUserKeys", params, method="GET")
+
+        # Extract apikey and secretkey
+        userkeys_list = resp.get("getuserkeysresponse", {}).get("userkeys", [])
+        if not userkeys_list:
+            raise ValueError("No user keys returned by CloudStack")
+
+        session_data["apikey"] = userkeys_list["apikey"]
+        session_data["secretkey"] = userkeys_list["secretkey"]
+
+        return session_data

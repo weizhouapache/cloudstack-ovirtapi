@@ -10,6 +10,7 @@ def store_session(auth_hash: str, session_data: dict):
         **session_data,
         "created": time.time()
     }
+    print("Stored session data " + str(session_data.items()))
 
 def get_session(auth_hash: str):
     """
