@@ -100,3 +100,15 @@ async def list_storage_domains(request: Request):
 
     return xml_response("storage_domains", payload)
 
+@router.get("/datacenters/{datacenter_id}/storagedomains")
+async def list_datacenter_storage_domains(datacenter_id: str, request: Request):
+    data = await cs_request(request, "listStoragePools", {})
+    pools = data["liststoragepoolsresponse"].get("storagepool", [])
+
+    # Filter by datacenter (zone) id
+    filtered_pools = [pool for pool in pools if pool.get("zoneid") == datacenter_id]
+
+    payload = [cs_storage_pool_to_ovirt(pool) for pool in filtered_pools]
+
+    return xml_response("storage_domains", payload)
+
