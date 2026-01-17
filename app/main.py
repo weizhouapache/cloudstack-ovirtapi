@@ -25,6 +25,13 @@ app = FastAPI(
     openapi_url=None
 )
 
+# PKI services don't require authentication - add BEFORE auth middleware
+from app.ovirtapi.pki import router as pki_router
+pki_prefix = SERVER.get("path", "/ovirt-engine/api").replace("/api", "/services")
+app.include_router(pki_router, prefix=pki_prefix)
+logger.info(f"PKI router included with prefix: {pki_prefix}")
+
+# Add middlewares for main API
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(oVirtAPIAuthMiddleware)
 

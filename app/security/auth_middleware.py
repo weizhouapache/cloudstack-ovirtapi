@@ -16,6 +16,10 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
+        # Skip auth for PKI services
+        if "/services/" in request.url.path:
+            return await call_next(request)
+
         auth_header = request.headers.get("Authorization")
         if not auth_header:
             logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
