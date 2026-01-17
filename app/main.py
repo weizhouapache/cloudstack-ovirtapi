@@ -6,6 +6,8 @@ from app.config import SERVER
 
 import uvicorn
 
+PREFIX=SERVER.get("path", "/ovirt-engine/api")
+
 cert_file, key_file = ensure_certificates()
 
 app = FastAPI(
@@ -17,7 +19,7 @@ app = FastAPI(
 
 app.add_middleware(oVirtAPIAuthMiddleware)
 
-app.include_router(ovirtapi_router, prefix="/ovirt-engine/api")
+app.include_router(ovirtapi_router, prefix=PREFIX)
 
 if __name__ == "__main__":
     host = SERVER.get("host", "0.0.0.0")

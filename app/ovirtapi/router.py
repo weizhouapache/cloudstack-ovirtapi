@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Request, Response, Depends
 from app.xml.builder import api_root_full
+from app.state.sessions import get_session, remove_session
+from app.cloudstack.client import cs_request
 
 router = APIRouter()
 
@@ -21,3 +23,31 @@ async def api_get(request: Request):
         content=api_root_full(),
         media_type="application/xml"
     )
+
+@router.get("/logout")
+async def logout(request: Request):
+    """
+    oVirt-compatible logout endpoint.
+    """
+    await logout_current_session(request)
+    return Response(status_code=200)
+
+async def logout_current_session(request: Request):
+    auth_hash = getattr(request.state, "auth_hash", None)
+    if not auth_hash:
+        return
+    session = get_session(auth_hash)
+    try:
+        await cs_request(
+            request=request,
+            command="logout",
+            params={},
+            method="POST"
+        )
+    except Exception as e:
+        # Logout failure should not block cleanup
+        print(f"CloudStack logout failed: {e}")
+
+    if session:
+        print(f"Removing session for auth_hash: {auth_hash}")
+        remove_session(auth_hash)

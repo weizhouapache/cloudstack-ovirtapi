@@ -217,3 +217,11 @@ hmac_secret = very-long-random-secret
 # License
 
 Apache License 2.0
+
+# Getting Started
+
+Build and run:
+
+```
+python -m app.main
+```

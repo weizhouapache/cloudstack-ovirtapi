@@ -10,7 +10,7 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
     params["command"] = command
     params["response"] = "json"
 
-    # Skip signature for login/logout
+    # Skip signature for login/logout/getUserKeys
     if command.lower() not in ("login", "logout", "getuserkeys"):
         if request is None or not hasattr(request.state, "auth_hash"):
             raise ValueError("auth_hash is required for signed commands")
@@ -27,11 +27,10 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
 
     cookies = {}
     if command.lower() in ("getuserkeys", "logout"):
-        if request is None or not hasattr(request.state, "jsessionid") \
-                or not hasattr(request.state, "auth_hash"):
+        if request is None or not hasattr(request.state, "auth_hash"):
             if command.lower() == "logout":
                 return
-            raise ValueError("jsessionid is required for signed command: getuserkeys")
+            raise ValueError("auth_hash is required for signed command: getuserkeys")
 
         auth_hash = request.state.auth_hash
         session = get_session(auth_hash)
@@ -39,7 +38,7 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
             if command.lower() == "logout":
                 return
             raise ValueError("No session found for auth_hash")
-        cookies = {"JSESSIONID": request.state.jsessionid, "sessionkey": session["sessionkey"]}
+        cookies = {"JSESSIONID": session["jsessionid"], "sessionkey": session["sessionkey"]}
 
     async with httpx.AsyncClient(verify=False) as client:
         if command.lower() in ("login", "logout", "getuserkeys") or method.upper() == "POST":

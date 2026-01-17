@@ -3,6 +3,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.security.hashing import hash_auth
 from app.state.sessions import get_session, store_session
 from app.cloudstack.client import cs_request
+from app.config import SERVER
 import base64
 
 class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
@@ -27,11 +28,15 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         auth_hash = hash_auth(raw_value)
         request.state.auth_hash = auth_hash
 
+        logoutUrl = SERVER.get("path", "/ovirt-engine/api") + "/logout"
+
         # Check cached session
         session = get_session(auth_hash)
-        if session is None:
+        if session is None and request.url.path != logoutUrl:
             # Login to CloudStack
             session_data = await self._cloudstack_login(request, raw_value)
+            if request.state.jsessionid:
+                session_data["jsessionid"] = request.state.jsessionid
             # Store session data
             store_session(auth_hash, session_data)
             # Get User Keys
@@ -95,11 +100,11 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         resp = await cs_request(request, "getUserKeys", params, method="GET")
 
         # Extract apikey and secretkey
-        userkeys_list = resp.get("getuserkeysresponse", {}).get("userkeys", [])
-        if not userkeys_list:
+        userkeys = resp.get("getuserkeysresponse", {}).get("userkeys", [])
+        if not userkeys:
             raise ValueError("No user keys returned by CloudStack")
 
-        session_data["apikey"] = userkeys_list["apikey"]
-        session_data["secretkey"] = userkeys_list["secretkey"]
+        session_data["apikey"] = userkeys["apikey"]
+        session_data["secretkey"] = userkeys["secretkey"]
 
         return session_data
