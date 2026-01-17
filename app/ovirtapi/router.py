@@ -21,10 +21,10 @@ async def api_head(request: Request):
 async def api_get(request: Request):
     return api_root_full()
 
-@router.get("/logout")
+@router.api_route("/logout", methods=["GET", "POST"])
 async def logout(request: Request):
     """
-    oVirt-compatible logout endpoint.
+    oVirt-compatible logout endpoint (supports GET and POST).
     """
     await logout_current_session(request)
     return Response(status_code=200)
