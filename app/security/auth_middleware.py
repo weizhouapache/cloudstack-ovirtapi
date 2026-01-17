@@ -5,6 +5,9 @@ from app.state.sessions import get_session, store_session
 from app.cloudstack.client import cs_request
 from app.config import SERVER
 import base64
+import logging
+
+logger = logging.getLogger(__name__)
 
 class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     """
@@ -15,6 +18,7 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         auth_header = request.headers.get("Authorization")
         if not auth_header:
+            logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
             raise HTTPException(status_code=401, detail="Authorization required")
 
         # Determine type
@@ -23,10 +27,12 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         elif auth_header.startswith("Bearer "):
             raw_value = auth_header.strip()
         else:
+            logger.warning(f"Unsupported auth type for {request.method} {request.url.path}")
             raise HTTPException(status_code=401, detail="Unsupported auth type")
 
         auth_hash = hash_auth(raw_value)
         request.state.auth_hash = auth_hash
+        logger.debug(f"Auth hash generated: {auth_hash[:16]}...")
 
         logoutUrl = SERVER.get("path", "/ovirt-engine/api") + "/logout"
 

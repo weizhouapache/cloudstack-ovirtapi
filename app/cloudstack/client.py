@@ -3,12 +3,17 @@ from fastapi import Request
 from app.config import CLOUDSTACK
 from app.cloudstack.signature import generate_signature
 from app.state.sessions import get_session
+import logging
+
+logger = logging.getLogger(__name__)
 
 API_URL=CLOUDSTACK["endpoint"]
 
 async def cs_request(request: Request, command: str, params: dict, method: str = "GET"):
     params["command"] = command
     params["response"] = "json"
+
+    logger.debug(f"CloudStack request: {command}")
 
     # Skip signature for login/logout/getUserKeys
     if command.lower() not in ("login", "logout", "getuserkeys"):
@@ -48,5 +53,7 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
         r.raise_for_status()
         if request and r.cookies.get("JSESSIONID"):
             request.state.jsessionid = r.cookies.get("JSESSIONID")
+
+        logger.debug(f"CloudStack response for {command}: {r.status_code}")
         return r.json()
 

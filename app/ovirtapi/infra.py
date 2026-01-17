@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 
 from app.cloudstack.client import cs_request
-from app.xml.builder import xml_response
+from app.utils.xml_builder import xml_response
 
 router = APIRouter()
 
