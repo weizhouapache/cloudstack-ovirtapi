@@ -19,10 +19,7 @@ async def api_head(request: Request):
 
 @router.get("")
 async def api_get(request: Request):
-    return Response(
-        content=api_root_full(),
-        media_type="application/xml"
-    )
+    return api_root_full()
 
 @router.get("/logout")
 async def logout(request: Request):

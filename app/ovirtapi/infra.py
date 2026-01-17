@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Response, Request
-from lxml import etree
+from fastapi import APIRouter, Request, HTTPException
 
 from app.cloudstack.client import cs_request
+from app.xml.builder import xml_response
 
 router = APIRouter()
 
@@ -10,89 +10,93 @@ async def list_datacenters(request: Request):
     data = await cs_request(request, "listZones", {})
     zones = data["listzonesresponse"].get("zone", [])
 
-    root = etree.Element("data_centers")
+    payload = [cs_zone_to_ovirt(zone) for zone in zones]
 
-    for zone in zones:
-        dc = etree.SubElement(root, "data_center")
-        etree.SubElement(dc, "id").text = zone["id"]
-        etree.SubElement(dc, "name").text = zone["name"]
-        etree.SubElement(dc, "status").text = "up"
+    return xml_response("data_centers", payload)
 
-    return Response(
-        content=etree.tostring(root, pretty_print=True),
-        media_type="application/xml"
-    )
+def cs_zone_to_ovirt(zone: dict) -> dict:
+    """
+    Convert a CloudStack Zone dict to an oVirt-compatible DataCenter payload.
+    """
+    return {
+        "id": zone["id"],
+        "name": zone["name"],
+        "status": "up" if zone.get("allocationstate") == "Enabled" else "down",
+    }
+
+def cs_cluster_to_ovirt(cluster: dict) -> dict:
+    """
+    Convert a CloudStack Cluster dict to an oVirt-compatible Cluster payload.
+    """
+    return {
+        "id": cluster["id"],
+        "name": cluster["name"],
+        "data_center": {"id": cluster["zoneid"]},
+        "cpu": {"architecture": "x86_64"},
+    }
 
 @router.get("/clusters")
 async def list_clusters(request: Request):
     data = await cs_request(request, "listClusters", {})
     clusters = data["listclustersresponse"].get("cluster", [])
 
-    root = etree.Element("clusters")
+    payload = [cs_cluster_to_ovirt(cluster) for cluster in clusters]
 
-    for cl in clusters:
-        c = etree.SubElement(root, "cluster")
-        etree.SubElement(c, "id").text = cl["id"]
-        etree.SubElement(c, "name").text = cl["name"]
+    return xml_response("clusters", payload)
 
-        # Map CloudStack zone → oVirt datacenter
-        dc = etree.SubElement(c, "data_center")
-        dc.set("id", cl["zoneid"])
-
-        # Required by Veeam
-        cpu = etree.SubElement(c, "cpu")
-        etree.SubElement(cpu, "architecture").text = "x86_64"
-
-    return Response(
-        content=etree.tostring(root, pretty_print=True),
-        media_type="application/xml"
-    )
+def cs_host_to_ovirt(host: dict) -> dict:
+    """
+    Convert a CloudStack Host dict to an oVirt-compatible Host payload.
+    """
+    state = host["state"].lower()
+    return {
+        "id": host["id"],
+        "name": host["name"],
+        "type": "kvm",
+        "cluster": {"id": host["clusterid"]},
+        "status": "up" if state == "up" else "down",
+    }
 
 @router.get("/hosts")
 async def list_hosts(request: Request):
-    data = await cs_request(request, "listHosts", {})
+    data = await cs_request(request, "listHosts",
+        { "type": "Routing" })
     hosts = data["listhostsresponse"].get("host", [])
 
-    root = etree.Element("hosts")
+    payload = [cs_host_to_ovirt(host) for host in hosts]
 
-    for h in hosts:
-        host_elem = etree.SubElement(root, "host")
-        etree.SubElement(host_elem, "id").text = h["id"]
-        etree.SubElement(host_elem, "name").text = h["name"]
-        etree.SubElement(host_elem, "type").text = "kvm"
+    return xml_response("hosts", payload)
 
-        # Map cluster
-        cluster = etree.SubElement(host_elem, "cluster")
-        cluster.set("id", h["clusterid"])
+@router.get("/hosts/{host_id}")
+async def get_host(host_id: str, request: Request):
+    data = await cs_request(request, "listHosts", {"id": host_id})
+    hosts = data["listhostsresponse"].get("host", [])
 
-        # Map status
-        state = h["state"].lower()
-        etree.SubElement(host_elem, "status").text = "up" if state == "up" else "down"
+    if not hosts:
+        raise HTTPException(status_code=404, detail="Host not found")
 
-    return Response(
-        content=etree.tostring(root, pretty_print=True),
-        media_type="application/xml"
-    )
+    host = cs_host_to_ovirt(hosts[0])
+
+    return xml_response("host", host)
+
+def cs_storage_pool_to_ovirt(pool: dict) -> dict:
+    """
+    Convert a CloudStack StoragePool dict to an oVirt-compatible StorageDomain payload.
+    """
+    return {
+        "id": pool["id"],
+        "name": pool["name"],
+        "type": "data",
+        "status": "up" if pool["state"] == "Up" else "down",
+        "data_center": {"id": pool["zoneid"]},
+    }
 
 @router.get("/storagedomains")
 async def list_storage_domains(request: Request):
     data = await cs_request(request, "listStoragePools", {})
     pools = data["liststoragepoolsresponse"].get("storagepool", [])
 
-    root = etree.Element("storage_domains")
+    payload = [cs_storage_pool_to_ovirt(pool) for pool in pools]
 
-    for pool in pools:
-        sd = etree.SubElement(root, "storage_domain")
-        etree.SubElement(sd, "id").text = pool["id"]
-        etree.SubElement(sd, "name").text = pool["name"]
-        etree.SubElement(sd, "type").text = "data"  # oVirt type: data, iso, export
-        etree.SubElement(sd, "status").text = "up" if pool["state"] == "Up" else "down"
-
-        dc = etree.SubElement(sd, "data_center")
-        dc.set("id", pool["zoneid"])
-
-    return Response(
-        content=etree.tostring(root, pretty_print=True),
-        media_type="application/xml"
-    )
+    return xml_response("storage_domains", payload)
 

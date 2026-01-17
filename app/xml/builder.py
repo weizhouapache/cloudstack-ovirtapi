@@ -1,31 +1,64 @@
-from lxml import etree
+from lxml.etree import Element, SubElement, tostring
+from fastapi import Response
 
 def api_root_full():
-    root = etree.Element("api")
-    pi = etree.SubElement(root, "product_info")
-    etree.SubElement(pi, "name").text = "CloudStack oVirtAPI Server"
-    etree.SubElement(pi, "vendor").text = "weizhouapache"
-    etree.SubElement(pi, "version").text = "1.0"
-    return etree.tostring(root, pretty_print=True)
+    payload = {
+        "product_info": {
+            "name": "CloudStack oVirtAPI Server",
+            "vendor": "Wei Zhou",
+            "version": "1.0"
+        }
+    }
+    return xml_response("api", payload)
 
-def xml_response(root_tag: str, children: dict = None):
-    root = etree.Element(root_tag)
-    if children:
-        for k, v in children.items():
-            child = etree.SubElement(root, k)
-            child.text = str(v)
-    return etree.tostring(
-        root,
-        pretty_print=True,
-        xml_declaration=True,
-        encoding="UTF-8"
+
+def _to_dict(obj):
+    """
+    Convert object → dict
+    """
+    if isinstance(obj, dict):
+        return obj
+    return {
+        k: v for k, v in vars(obj).items()
+    }
+
+
+def _build_xml(parent: Element, data):
+    """
+    Recursively build XML from dict / list / object / scalar.
+    """
+    if data is None:
+        return
+
+    # list → repeated elements
+    if isinstance(data, list):
+        for item in data:
+            child = SubElement(parent, parent.tag[:-1] if parent.tag.endswith("s") else "item")
+            _build_xml(child, item)
+        return
+
+    # object or dict
+    if isinstance(data, (dict, object)) and not isinstance(data, (str, int, float, bool)):
+        data_dict = _to_dict(data)
+        for key, value in data_dict.items():
+            child = SubElement(parent, key)
+            _build_xml(child, value)
+        return
+
+    # scalar
+    parent.text = str(data)
+
+
+def xml_response(root_name: str, payload, status_code: int = 200) -> Response:
+    """
+    Build XML response from object/dict/list.
+    """
+    root = Element(root_name)
+    _build_xml(root, payload)
+
+    return Response(
+        content=tostring(root, encoding="utf-8", pretty_print=True),
+        media_type="application/xml",
+        status_code=status_code
     )
 
-def vms_response(vms):
-    root = etree.Element("vms")
-    for vm in vms:
-        e = etree.SubElement(root, "vm")
-        etree.SubElement(e, "id").text = vm["id"]
-        etree.SubElement(e, "name").text = vm["name"]
-        etree.SubElement(e, "status").text = vm["state"]
-    return etree.tostring(root, pretty_print=True)
