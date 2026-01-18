@@ -133,50 +133,6 @@ Purpose:
 - Capability discovery
 - Required by Veeam
 
-# APIs Used by Veeam (Planned)
-
-## Inventory
-
-```
-GET /ovirt-engine/api/datacenters
-GET /ovirt-engine/api/clusters
-GET /ovirt-engine/api/hosts
-GET /ovirt-engine/api/storageDomains
-GET /ovirt-engine/api/vms
-```
-
-## Backup & Snapshot Control
-
-```
-POST   /ovirt-engine/api/vms/{vm_id}/backups
-GET    /ovirt-engine/api/vms/{vm_id}/backups/{backup_id}
-POST   /ovirt-engine/api/vms/{vm_id}/backups/{backup_id}/finalize
-DELETE /ovirt-engine/api/vms/{vm_id}/checkpoints/{checkpoint_id}
-```
-
-## Image Transfer
-
-```
-POST /ovirt-engine/api/imagetransfers
-GET  /ovirt-engine/api/imagetransfers/{id}
-POST /ovirt-engine/api/imagetransfers/{id}/finalize
-```
-
-## Disk Extents
-
-```
-GET /images/{image_id}/extents
-GET /images/{image_id}
-```
-
-## Restore
-
-```
-POST /ovirt-engine/api/vms
-POST /ovirt-engine/api/disks
-POST /ovirt-engine/api/imagetransfers   (write mode)
-```
-
 # Configuration Example
 
 Example **config.ini**
@@ -257,7 +213,7 @@ For example:
 curl -k -X POST "https://localhost:443/ovirt-engine/sso/oauth/token" -d "grant_type=password&username=admin&password=password"
 ```
 
-The response will include an access token in the access_token field. For example:
+The response will include an access token in the `access_token` field. For example:
 
 ```json
 {
@@ -325,4 +281,87 @@ The oVirt REST API guide can be found at https://www.ovirt.org/documentation/doc
 | /api/imagetransfers/{id}/finalize | Post | Finalizes image transfer. Codes: 200 OK, 409 Conflict | 150.2. list GET |
 | /api/imagetransfers/{id}/cancel | Post | Cancels image transfer. Codes: 200 OK, 409 Conflict | 150.2. list GET |
 | **/api/hosts** | Get | List of hosts. Codes: 200 OK | 18 List hosts |
+
+## APIs Now Fully Implemented
+
+The following APIs have been implemented in the CloudStack oVirtAPI server:
+
+### Infrastructure APIs
+- `GET /api` - API root info (version, links)
+- `HEAD /api` - API health check
+- `GET /api/datacenters` - List of data centers
+- `GET /api/datacenters/{id}/networks` - List of networks in a data center
+- `GET /api/datacenters/{id}/storagedomains` - List of storage domains in a data center
+- `GET /api/clusters` - List of clusters
+- `GET /api/hosts` - List of hosts
+- `GET /api/hosts/{id}` - Host details
+
+### VM APIs
+- `GET /api/vms` - List of virtual machines
+- `GET /api/vms/{id}` - VM details
+- `POST /api/vms/{id}/start` - Starts the VM
+- `POST /api/vms/{id}/stop` - Stops the VM
+- `POST /api/vms/{id}/shutdown` - Gracefully shuts down the VM
+
+### Network APIs
+- `GET /api/networks` - List of networks
+- `GET /api/networks/{id}` - Network details
+- `GET /api/vnicprofiles` - List of vNIC profiles
+- `GET /api/vnicprofiles/{id}` - vNIC profile details
+
+### Storage APIs
+- `GET /api/storagedomains` - List of storage domains
+- `GET /api/disks` - List of disks
+- `GET /api/disks/{id}` - Disk details
+- `PUT /api/disks/{id}` - Updates disk configuration
+- `DELETE /api/disks/{id}` - Deletes a disk
+- `POST /api/disks/{id}/copy` - Copies a disk
+- `POST /api/disks/{id}/reduce` - Reduces disk size
+
+### VM Disk Management APIs
+- `GET /api/vms/{vmId}/diskattachments` - List of disks attached to the VM
+- `POST /api/vms/{vmId}/diskattachments` - Attaches disk to VM
+- `DELETE /api/vms/{vmId}/diskattachments/{diskId}?detach_only=true` - Detaches disk from VM
+
+### VM Network Interface APIs
+- `GET /api/vms/{vmId}/nics` - List of VM network interfaces
+- `POST /api/vms/{vmId}/nics` - Creates NIC for VM
+- `GET /api/vms/{vmId}/nics/{nicId}` - NIC details
+- `PUT /api/vms/{vmId}/nics/{nicId}` - Updates NIC
+- `DELETE /api/vms/{vmId}/nics/{nicId}` - Removes NIC
+
+### VM Backup & Snapshot APIs
+- `POST /api/vms/{vmId}/backups` - Creates VM backup
+- `GET /api/vms/{vmId}/backups/{backupId}` - Backup details
+- `GET /api/vms/{vmId}/backups/{backupId}/disks` - List of disks in the backup
+- `POST /api/vms/{vmId}/backups/{backupId}/finalize` - Finalizes the backup
+- `GET /api/vms/{vmId}/checkpoints` - List of checkpoints
+- `DELETE /api/vms/{vmId}/checkpoints/{checkpointId}` - Deletes a checkpoint
+- `GET /api/vms/{vmId}/snapshots` - List of snapshots
+- `POST /api/vms/{vmId}/snapshots` - Creates snapshot
+- `GET /api/vms/{vmId}/snapshots/{snapshotId}` - Snapshot details
+- `POST /api/vms/{vmId}/snapshots/{snapshotId}/restore` - Restores VM from snapshot
+- `DELETE /api/vms/{vmId}/snapshots/{snapshotId}?async=false` - Deletes a snapshot
+
+### Job Management APIs
+- `GET /api/jobs/{id}` - Job status
+
+### Tagging APIs
+- `GET /api/tags` - List of tags
+- `POST /api/vms/{id}/tags` - Assigns a tag to VM
+
+### Image Transfer APIs
+- `POST /api/imagetransfers` - Creates new image transfers for backup/restore operations
+- `GET /api/imagetransfers/{id}` - Gets status of image transfers
+- `POST /api/imagetransfers/{id}/finalize` - Finalizes image transfers
+- `POST /api/imagetransfers/{id}/cancel` - Cancels image transfers
+
+### Images APIs
+- `GET /images/{image_id}/extents` - Gets image extents for incremental backup
+- `GET /images/{image_id}` - Gets image information
+
+### Authentication & PKI APIs
+- `POST /sso/oauth/token` - OAuth token endpoint
+- `GET /services/pki-resource?resource=ca-certificate&format=X509-PEM-CA` - Gets CA certificate
+- `POST /api/logout` - Logout endpoint
 

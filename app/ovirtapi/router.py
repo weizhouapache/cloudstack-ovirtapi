@@ -9,11 +9,29 @@ from app.ovirtapi.infra import router as infra_router
 from app.ovirtapi.vm import router as vm_router
 from app.ovirtapi.backup import router as backup_router
 from app.ovirtapi.network import router as network_router
+from app.ovirtapi.imagetransfer import router as imagetransfer_router
+from app.ovirtapi.images import router as images_router
+from app.ovirtapi.jobs import router as jobs_router
+from app.ovirtapi.disks import router as disks_router
+from app.ovirtapi.vmdisks import router as vmdisks_router
+from app.ovirtapi.vmnics import router as vmnics_router
+from app.ovirtapi.vmsnapshots import router as vmsnapshots_router
+from app.ovirtapi.tags import router as tags_router
+from app.ovirtapi.vnicprofiles import router as vnicprofiles_router
 
 router.include_router(infra_router)
 router.include_router(vm_router)
 router.include_router(backup_router)
 router.include_router(network_router)
+router.include_router(imagetransfer_router)
+router.include_router(images_router, prefix="/images")
+router.include_router(jobs_router)
+router.include_router(disks_router)
+router.include_router(vmdisks_router)
+router.include_router(vmnics_router)
+router.include_router(vmsnapshots_router)
+router.include_router(tags_router)
+router.include_router(vnicprofiles_router)
 
 @router.head("")
 async def api_head(request: Request):
