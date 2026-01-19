@@ -180,10 +180,34 @@ Apache License 2.0
 
 # Getting Started
 
-## Build and run
+## Prerequisites
+
+Before running the application, ensure all required packages from `requirements.txt` are installed:
 
 ```
+pip install -r requirements.txt
+```
+
+## Build and run
+
+### Manual run
+```
 python -m app.main
+```
+
+### Using run.sh script
+
+The project includes a `run.sh` script that runs the application as a background service with sudo privileges:
+
+```
+./run.sh
+```
+
+**Note**: The `run.sh` script assumes all required packages from `requirements.txt` are already installed. Make sure to install them before running the script:
+
+```
+pip install -r requirements.txt
+./run.sh
 ```
 
 ## Basic Authentication
