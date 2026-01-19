@@ -13,8 +13,8 @@ import logging
 logger = setup_logging()
 logger.info("Starting CloudStack oVirtAPI Server")
 
-cert_file, key_file = ensure_certificates()
-logger.info(f"Using certificates: {cert_file}, {key_file}")
+cert_file, key_file, ca_cert_file = ensure_certificates()
+logger.info(f"Using certificates: {cert_file}, {key_file}, CA: {ca_cert_file}")
 
 app = FastAPI(
     title="CloudStack oVirtAPI Server",
@@ -45,9 +45,35 @@ logger.info(f"API Router included with prefix: {api_prefix}")
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(oVirtAPIAuthMiddleware)
 
+def create_full_chain_cert(server_cert_file, ca_cert_file):
+    """Create a certificate chain file that includes both server cert and CA cert."""
+    import os
+    chain_cert_file = server_cert_file.replace('.crt', '-chain.crt')
+
+    # Read server certificate
+    with open(server_cert_file, 'r') as f:
+        server_cert = f.read()
+
+    # Read CA certificate
+    with open(ca_cert_file, 'r') as f:
+        ca_cert = f.read()
+
+    # Combine certificates
+    full_chain = server_cert + "\n" + ca_cert
+
+    # Write combined certificate
+    with open(chain_cert_file, 'w') as f:
+        f.write(full_chain)
+
+    return chain_cert_file
+
 if __name__ == "__main__":
     host = SERVER.get("host", "0.0.0.0")
     port = int(SERVER.get("port", 443))
+
+    # Create certificate chain file
+    chain_cert_file = create_full_chain_cert(cert_file, ca_cert_file)
+    logger.info(f"Created certificate chain: {chain_cert_file}")
 
     logger.info(f"Starting server on {host}:{port}")
 
@@ -55,7 +81,7 @@ if __name__ == "__main__":
         "app.main:app",
         host=host,
         port=port,
-        ssl_certfile=cert_file,
+        ssl_certfile=chain_cert_file,  # Use the full chain certificate
         ssl_keyfile=key_file,
         log_level="info",
         reload=True

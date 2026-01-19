@@ -44,15 +44,17 @@ async def get_pki_resource(resource: str = Query(None), format: str = Query(None
 
     # Handle CA certificate request
     if resource.lower() == "ca-certificate" and format.upper() == "X509-PEM-CA":
-        cert_file = SSL.get("cert_file", "./certs/server.crt")
+        # Use the CA certificate instead of the server certificate
+        from app.config import SSL
+        cert_file = SSL.get("ca_cert_file", "./certs/root-ca.crt")
 
-        # Read the certificate
+        # Read the CA certificate
         cert_content = read_certificate_file(cert_file)
 
         # Return as PEM format
         return Response(
             content=cert_content,
-            media_type="application/pkix-cert",
+            media_type="application/x-pem-file",
             headers={"Content-Disposition": "attachment; filename=ca-certificate.pem"}
         )
 

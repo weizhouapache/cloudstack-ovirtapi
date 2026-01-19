@@ -79,7 +79,73 @@ def _get_ip_from_socket():
     except Exception:
         return None
 
-def create_self_signed_cert(cert_file, key_file, host_ip, public_ip=None):
+def create_ca_cert(ca_cert_file, ca_key_file):
+    """
+    Create a self-signed CA certificate and key.
+    """
+    # Generate a private key for the CA
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    with open(ca_key_file, "wb") as f:
+        f.write(ca_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+
+    # Create the CA certificate
+    ca_subject = x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "CA"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CloudStack oVirtAPI CA"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "CloudStack oVirtAPI Root CA"),
+    ])
+
+    ca_cert = x509.CertificateBuilder().subject_name(ca_subject)\
+        .issuer_name(ca_subject)\
+        .public_key(ca_key.public_key())\
+        .serial_number(x509.random_serial_number())\
+        .not_valid_before(datetime.utcnow())\
+        .not_valid_after(datetime.utcnow() + timedelta(days=3650))\
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=0), critical=True
+        )\
+        .add_extension(
+            x509.KeyUsage(
+                key_encipherment=True,
+                digital_signature=True,
+                key_cert_sign=True,
+                crl_sign=True,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False
+            ), critical=True
+        )\
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False
+        )\
+        .sign(ca_key, hashes.SHA256())
+
+    with open(ca_cert_file, "wb") as f:
+        f.write(ca_cert.public_bytes(serialization.Encoding.PEM))
+
+    print(f"[INFO] CA certificate created: {ca_cert_file}, {ca_key_file}")
+
+
+def create_ca_signed_cert(cert_file, key_file, ca_cert_file, ca_key_file, host_ip, public_ip=None):
+    """
+    Create a certificate signed by the internal CA.
+    """
+    # Load the CA certificate and key
+    with open(ca_cert_file, "rb") as f:
+        ca_cert = x509.load_pem_x509_certificate(f.read())
+
+    with open(ca_key_file, "rb") as f:
+        ca_key = serialization.load_pem_private_key(f.read(), password=None)
+
+    # Generate a new private key for the server
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     with open(key_file, "wb") as f:
         f.write(key.private_bytes(
@@ -88,13 +154,8 @@ def create_self_signed_cert(cert_file, key_file, host_ip, public_ip=None):
             encryption_algorithm=serialization.NoEncryption()
         ))
 
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "CA"),
-        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CloudStack oVirtAPI"),
-        x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
-    ])
+    # Intialize COMMON name
+    common_name = host_ip
 
     # Build Subject Alternative Names
     san_list = [x509.DNSName("localhost")]
@@ -102,7 +163,8 @@ def create_self_signed_cert(cert_file, key_file, host_ip, public_ip=None):
     # Add public IP if provided
     if public_ip and public_ip.strip():
         san_list.append(x509.IPAddress(ip_address(public_ip)))
-    
+        common_name = public_ip
+
     # Add host IP if provided
     if host_ip and host_ip.strip():
         try:
@@ -112,29 +174,75 @@ def create_self_signed_cert(cert_file, key_file, host_ip, public_ip=None):
             # If not valid IP, add as DNS name
             san_list.append(x509.DNSName(host_ip))
 
-    cert = x509.CertificateBuilder().subject_name(subject).issuer_name(issuer)\
-        .public_key(key.public_key()).serial_number(x509.random_serial_number())\
+    # Create the certificate subject
+    subject = x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "CA"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "CloudStack oVirtAPI"),
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+    ])
+
+    # Create the certificate signed by the CA
+    cert = x509.CertificateBuilder().subject_name(subject)\
+        .issuer_name(ca_cert.subject)\
+        .public_key(key.public_key())\
+        .serial_number(x509.random_serial_number())\
         .not_valid_before(datetime.utcnow())\
         .not_valid_after(datetime.utcnow() + timedelta(days=365))\
         .add_extension(x509.SubjectAlternativeName(san_list), critical=False)\
-        .sign(key, hashes.SHA256())
+        .add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True
+        )\
+        .add_extension(
+            x509.KeyUsage(
+                key_encipherment=True,
+                digital_signature=True,
+                key_cert_sign=False,
+                crl_sign=False,
+                content_commitment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                encipher_only=False,
+                decipher_only=False
+            ), critical=True
+        )\
+        .add_extension(
+            x509.ExtendedKeyUsage([
+                x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
+                x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH
+            ]), critical=False
+        )\
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False
+        )\
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False
+        )\
+        .sign(ca_key, hashes.SHA256())
 
     with open(cert_file, "wb") as f:
         f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     san_names = ", ".join([str(name) for name in san_list])
-    print(f"[INFO] Self-signed certificate created: {cert_file}, {key_file}")
+    print(f"[INFO] CA-signed certificate created: {cert_file}, {key_file}")
     print(f"[INFO] Certificate SANs: {san_names}")
+    print(f"[INFO] Signed by CA: {ca_cert.subject}")
 
 
 def ensure_certificates():
     cert_file = SSL.get("cert_file", "./certs/server.crt")
     key_file = SSL.get("key_file", "./certs/server.key")
+    # Allow configurable CA certificate and key file paths
+    ca_cert_file = SSL.get("ca_cert_file", "./certs/root-ca.crt")
+    ca_key_file = SSL.get("ca_key_file", "./certs/root-ca.key")
     host = SERVER.get("host", "0.0.0.0")
     public_ip = SERVER.get("public_ip", "").strip()
 
     os.makedirs(os.path.dirname(cert_file), exist_ok=True)
     os.makedirs(os.path.dirname(key_file), exist_ok=True)
+    os.makedirs(os.path.dirname(ca_cert_file), exist_ok=True)
+    os.makedirs(os.path.dirname(ca_key_file), exist_ok=True)
 
     # If host is 0.0.0.0 and no public_ip set, auto-detect server IP
     if host == "0.0.0.0":
@@ -144,7 +252,15 @@ def ensure_certificates():
     elif host != "localhost":
         host_ip = host
 
-    if not os.path.exists(cert_file) or not os.path.exists(key_file):
-        create_self_signed_cert(cert_file, key_file, host_ip, public_ip)
+    # Create CA certificate and key if they don't exist
+    if not os.path.exists(ca_cert_file):
+        print("[INFO] Creating internal CA certificate and key...")
+        create_ca_cert(ca_cert_file, ca_key_file)
 
-    return cert_file, key_file
+    if not os.path.exists(cert_file) or not os.path.exists(key_file):
+        if os.path.exists(ca_cert_file) and os.path.exists(ca_cert_file):
+            # Create CA-signed server certificate
+            print("[INFO] Creating CA-signed server certificate...")
+            create_ca_signed_cert(cert_file, key_file, ca_cert_file, ca_key_file, host_ip, public_ip)
+
+    return cert_file, key_file, ca_cert_file

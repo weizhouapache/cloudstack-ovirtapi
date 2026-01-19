@@ -189,12 +189,15 @@ async def oauth_token(
         store_token(access_token, user_info)
         logger.info(f"OAuth token generated for user: {username}")
 
-        # Return OAuth token response
+        # Return OAuth token response in oVirt format
+        # Calculate expiration timestamp (milliseconds since epoch)
+        exp_timestamp = int((time.time() + (TOKEN_EXPIRY_HOURS * 3600)) * 1000)
+
         data = {
             "access_token": access_token,
-            "token_type": "Bearer",
-            "expires_in": TOKEN_EXPIRY_HOURS * 3600,
-            "scope": "ovirt-engine-api"
+            "scope": "",
+            "exp": str(exp_timestamp),
+            "token_type": "bearer"
         }
 
         # Convert the data to JSON with indentation
