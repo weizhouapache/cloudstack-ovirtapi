@@ -8,6 +8,7 @@ import base64
 import logging
 
 logger = logging.getLogger(__name__)
+api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
 
 class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     """
@@ -16,12 +17,14 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        # Skip auth for PKI services and OAuth endpoints
+        # Skip auth for PKI services, OAuth endpoints, and the main API endpoint
         if "/services/" in request.url.path or "/sso/" in request.url.path:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")
         if not auth_header:
+            if request.url.path == api_prefix:
+                return await call_next(request)
             logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
             raise HTTPException(status_code=401, detail="Authorization required")
 
@@ -51,7 +54,7 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         request.state.auth_hash = auth_hash
         logger.debug(f"Auth hash generated: {auth_hash[:16]}...")
 
-        logoutUrl = SERVER.get("path", "/ovirt-engine/api") + "/logout"
+        logoutUrl = SERVER.get("path", api_prefix) + "/logout"
 
         # Check cached session
         session = get_session(auth_hash)
