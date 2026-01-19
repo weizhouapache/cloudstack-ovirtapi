@@ -210,6 +210,16 @@ pip install -r requirements.txt
 ./run.sh
 ```
 
+## Stopping the application
+
+To stop the running application, use the `stop.sh` script:
+
+```
+./stop.sh
+```
+
+This will find and terminate the running instance of the CloudStack oVirt-Compatible API Server.
+
 ## Basic Authentication
 
 - GET request to retrieve a list of virtual machines:
