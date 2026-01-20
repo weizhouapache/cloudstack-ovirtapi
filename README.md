@@ -188,6 +188,13 @@ Before running the application, ensure all required packages from `requirements.
 pip install -r requirements.txt
 ```
 
+On Ubuntu systems, you can alternatively install the required packages using apt:
+
+```
+sudo apt update
+sudo apt install python3-fastapi python3-uvicorn python3-httpx python3-lxml python3-cryptography python3-multipart
+```
+
 ## Build and run
 
 ### Manual run
@@ -219,6 +226,52 @@ To stop the running application, use the `stop.sh` script:
 ```
 
 This will find and terminate the running instance of the CloudStack oVirt-Compatible API Server.
+
+## Docker Support
+
+The application can be deployed using Docker. A Dockerfile is provided to build an image based on Ubuntu 24.04.
+
+### Building the Docker Image
+
+To build the Docker image:
+
+```
+docker build -t cloudstack-ovirtapi .
+```
+
+### Running with Docker
+
+To run the application with Docker, mounting a local config.ini file:
+
+```
+docker run -d -p 443:443 -v /path/to/local/config.ini:/app/config.ini --name cloudstack-ovirtapi cloudstack-ovirtapi
+```
+
+Alternatively, you can configure the application using environment variables:
+
+```
+docker run -d -p 443:443 \
+  -e SERVER_HOST=0.0.0.0 \
+  -e SERVER_PORT=443 \
+  -e PUBLIC_IP= \
+  -e SSL_CERT_FILE=./certs/server.crt \
+  -e SSL_KEY_FILE=./certs/server.key \
+  -e CLOUDSTACK_ENDPOINT=https://cloudstack.example.com/client/api \
+  -e HMAC_SECRET=very-long-random-secret \
+  -e LOG_LEVEL=INFO \
+  -e LOG_FILE=./logs/app.log \
+  --name cloudstack-ovirtapi cloudstack-ovirtapi
+```
+
+Or a simple example with just the CloudStack http endpoint:
+
+```
+docker run -d -p 443:443 \
+  -e CLOUDSTACK_ENDPOINT=http://cloudstack.example.com:8080/client/api \
+  --name cloudstack-ovirtapi cloudstack-ovirtapi
+```
+
+The Docker image will update the config.ini file with the provided environment variables at startup.
 
 ## Basic Authentication
 
