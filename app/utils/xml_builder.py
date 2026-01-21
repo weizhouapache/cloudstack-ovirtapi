@@ -56,7 +56,7 @@ def xml_response(root_name: str, payload, status_code: int = 200) -> Response:
     _build_xml(root, payload)
 
     return Response(
-        content=tostring(root, encoding="utf-8", pretty_print=True),
+        content=tostring(root, xml_declaration=True, encoding="utf-8", pretty_print=True),
         media_type="application/xml",
         status_code=status_code
     )
