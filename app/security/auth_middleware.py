@@ -23,8 +23,6 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
 
         auth_header = request.headers.get("Authorization")
         if not auth_header:
-            if request.url.path == api_prefix:
-                return await call_next(request)
             logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
             raise HTTPException(status_code=401, detail="Authorization required")
 
