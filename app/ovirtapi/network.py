@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 
 router = APIRouter()
 
@@ -21,7 +21,7 @@ async def list_networks(request: Request):
 
     payload = [cs_network_to_ovirt(network) for network in networks]
 
-    return xml_response("networks", payload)
+    return create_response(request, "networks", payload)
 
 @router.get("/networks/{network_id}")
 async def get_network(network_id: str, request: Request):
@@ -33,7 +33,7 @@ async def get_network(network_id: str, request: Request):
 
     network = cs_network_to_ovirt(networks[0])
 
-    return xml_response("network", network)
+    return create_response(request, "network", network)
 
 @router.get("/datacenters/{datacenter_id}/networks")
 async def list_datacenter_networks(datacenter_id: str, request: Request):
@@ -45,4 +45,4 @@ async def list_datacenter_networks(datacenter_id: str, request: Request):
 
     payload = [cs_network_to_ovirt(network) for network in filtered_networks]
 
-    return xml_response("networks", payload)
+    return create_response(request, "networks", payload)

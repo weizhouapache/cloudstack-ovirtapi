@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 import time
 
@@ -56,7 +56,7 @@ async def create_image_transfer(request: Request):
         "signed_ticket": transfer_data["signed_ticket"]
     }
     
-    return xml_response("image_transfer", payload)
+    return create_response(request, "image_transfer", payload)
 
 
 @router.get("/imagetransfers/{transfer_id}")
@@ -83,7 +83,7 @@ async def get_image_transfer(transfer_id: str, request: Request):
         "signed_ticket": transfer["signed_ticket"]
     }
     
-    return xml_response("image_transfer", payload)
+    return create_response(request, "image_transfer", payload)
 
 
 @router.post("/imagetransfers/{transfer_id}/finalize")
@@ -108,7 +108,7 @@ async def finalize_image_transfer(transfer_id: str, request: Request):
         "phase": transfer["phase"]
     }
     
-    return xml_response("image_transfer", payload)
+    return create_response(request, "image_transfer", payload)
 
 
 @router.post("/imagetransfers/{transfer_id}/cancel")
@@ -133,4 +133,4 @@ async def cancel_image_transfer(transfer_id: str, request: Request):
         "phase": transfer["phase"]
     }
     
-    return xml_response("image_transfer", payload)
+    return create_response(request, "image_transfer", payload)

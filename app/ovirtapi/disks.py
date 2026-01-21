@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 
 router = APIRouter()
 
@@ -32,7 +32,7 @@ async def list_disks(request: Request):
         
         payload = [cs_volume_to_ovirt(volume) for volume in volumes]
         
-        return xml_response("disks", payload)
+        return create_response(request, "disks", payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list disks: {str(e)}")
 
@@ -52,7 +52,7 @@ async def get_disk(disk_id: str, request: Request):
         volume = volumes[0]
         payload = cs_volume_to_ovirt(volume)
         
-        return xml_response("disk", payload)
+        return create_response(request, "disk", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -78,7 +78,7 @@ async def update_disk(disk_id: str, request: Request):
         volume = volumes[0]
         payload = cs_volume_to_ovirt(volume)
         
-        return xml_response("disk", payload)
+        return create_response(request, "disk", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -105,7 +105,7 @@ async def delete_disk(disk_id: str, request: Request):
         # await cs_request(request, "deleteVolume", {"id": disk_id})
         
         # Return success response
-        return xml_response("disk", {"id": disk_id})
+        return create_response(request, "disk", {"id": disk_id})
     except HTTPException:
         raise
     except Exception as e:
@@ -140,7 +140,7 @@ async def copy_disk(disk_id: str, request: Request):
             "source_disk": {"id": disk_id}
         }
         
-        return xml_response("disk", payload)
+        return create_response(request, "disk", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -173,7 +173,7 @@ async def reduce_disk(disk_id: str, request: Request):
             "original_size": original_volume.get("size", 0)
         }
         
-        return xml_response("disk", payload)
+        return create_response(request, "disk", payload)
     except HTTPException:
         raise
     except Exception as e:

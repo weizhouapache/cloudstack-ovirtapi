@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Query
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 
 router = APIRouter()
 
@@ -45,7 +45,7 @@ async def list_disk_attachments(vm_id: str, request: Request):
         # Convert volumes to disk attachments
         attachments = [cs_volume_attachment_to_ovirt(vol, vm_id) for vol in volumes]
         
-        return xml_response("disk_attachments", attachments)
+        return create_response(request, "disk_attachments", attachments)
     except HTTPException:
         raise
     except Exception as e:
@@ -81,7 +81,7 @@ async def attach_disk(vm_id: str, request: Request):
             "bootable": False
         }
         
-        return xml_response("disk_attachment", payload)
+        return create_response(request, "disk_attachment", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -120,7 +120,7 @@ async def detach_disk(vm_id: str, disk_attachment_id: str, request: Request, det
             "active": False
         }
         
-        return xml_response("disk_attachment", payload)
+        return create_response(request, "disk_attachment", payload)
     except HTTPException:
         raise
     except Exception as e:

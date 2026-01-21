@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 
 router = APIRouter()
@@ -37,7 +37,7 @@ async def list_vnic_profiles(request: Request):
         # Convert each network to a vNIC profile
         vnic_profiles = [cs_network_to_vnic_profile(network) for network in networks]
         
-        return xml_response("vnic_profiles", vnic_profiles)
+        return create_response(request, "vnic_profiles", vnic_profiles)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list vNIC profiles: {str(e)}")
 
@@ -58,7 +58,7 @@ async def get_vnic_profile(profile_id: str, request: Request):
         network = networks[0]
         vnic_profile = cs_network_to_vnic_profile(network)
         
-        return xml_response("vnic_profile", vnic_profile)
+        return create_response(request, "vnic_profile", vnic_profile)
     except HTTPException:
         raise
     except Exception as e:

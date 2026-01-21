@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
 
 router = APIRouter()
@@ -25,7 +25,7 @@ async def list_vms(request: Request):
 
     payload = [cs_vm_to_ovirt(vm) for vm in vms]
 
-    return xml_response("vms", payload)
+    return create_response(request, "vms", payload)
 
 
 @router.get("/vms/{vm_id}")
@@ -42,7 +42,7 @@ async def get_vm(vm_id: str, request: Request):
     vm = vms[0]
     payload = cs_vm_to_ovirt(vm)
 
-    return xml_response("vm", payload)
+    return create_response(request, "vm", payload)
 
 @router.post("/vms/{vm_id}/start")
 async def start_vm(vm_id: str, request: Request):
@@ -62,7 +62,7 @@ async def start_vm(vm_id: str, request: Request):
         vm = data.get("startvirtualmachineresponse", {}).get("virtualmachine", {})
 
     payload = cs_vm_to_ovirt(vm)
-    return xml_response("vm", payload)
+    return create_response(request, "vm", payload)
 
 @router.post("/vms/{vm_id}/stop")
 async def stop_vm(vm_id: str, request: Request):
@@ -82,7 +82,7 @@ async def stop_vm(vm_id: str, request: Request):
         vm = data.get("stopvirtualmachineresponse", {}).get("virtualmachine", {})
 
     payload = cs_vm_to_ovirt(vm)
-    return xml_response("vm", payload)
+    return create_response(request, "vm", payload)
 
 @router.post("/vms/{vm_id}/shutdown")
 async def shutdown_vm(vm_id: str, request: Request):
@@ -102,5 +102,5 @@ async def shutdown_vm(vm_id: str, request: Request):
         vm = data.get("stopvirtualmachineresponse", {}).get("virtualmachine", {})
 
     payload = cs_vm_to_ovirt(vm)
-    return xml_response("vm", payload)
+    return create_response(request, "vm", payload)
 

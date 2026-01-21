@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
 
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 
 router = APIRouter()
 
@@ -12,7 +12,7 @@ async def list_datacenters(request: Request):
 
     payload = [cs_zone_to_ovirt(zone) for zone in zones]
 
-    return xml_response("data_centers", payload)
+    return create_response(request, "data_centers", payload)
 
 def cs_zone_to_ovirt(zone: dict) -> dict:
     """
@@ -42,7 +42,7 @@ async def list_clusters(request: Request):
 
     payload = [cs_cluster_to_ovirt(cluster) for cluster in clusters]
 
-    return xml_response("clusters", payload)
+    return create_response(request, "clusters", payload)
 
 def cs_host_to_ovirt(host: dict) -> dict:
     """
@@ -65,7 +65,7 @@ async def list_hosts(request: Request):
 
     payload = [cs_host_to_ovirt(host) for host in hosts]
 
-    return xml_response("hosts", payload)
+    return create_response(request, "hosts", payload)
 
 @router.get("/hosts/{host_id}")
 async def get_host(host_id: str, request: Request):
@@ -77,7 +77,7 @@ async def get_host(host_id: str, request: Request):
 
     host = cs_host_to_ovirt(hosts[0])
 
-    return xml_response("host", host)
+    return create_response(request, "host", host)
 
 def cs_storage_pool_to_ovirt(pool: dict) -> dict:
     """
@@ -98,7 +98,7 @@ async def list_storage_domains(request: Request):
 
     payload = [cs_storage_pool_to_ovirt(pool) for pool in pools]
 
-    return xml_response("storage_domains", payload)
+    return create_response(request, "storage_domains", payload)
 
 @router.get("/datacenters/{datacenter_id}/storagedomains")
 async def list_datacenter_storage_domains(datacenter_id: str, request: Request):
@@ -110,5 +110,5 @@ async def list_datacenter_storage_domains(datacenter_id: str, request: Request):
 
     payload = [cs_storage_pool_to_ovirt(pool) for pool in filtered_pools]
 
-    return xml_response("storage_domains", payload)
+    return create_response(request, "storage_domains", payload)
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 import time
 
@@ -62,7 +62,7 @@ async def list_vm_checkpoints(vm_id: str, request: Request):
                 ovirt_snapshot["vm"] = {"id": vm_id}  # Add VM reference
                 all_snapshots.append(ovirt_snapshot)
         
-        return xml_response("checkpoints", all_snapshots)
+        return create_response(request, "checkpoints", all_snapshots)
     except HTTPException:
         raise
     except Exception as e:
@@ -98,7 +98,7 @@ async def delete_vm_checkpoint(vm_id: str, checkpoint_id: str, request: Request)
             pass
         
         # Return success response
-        return xml_response("checkpoint", {"id": checkpoint_id, "vm": {"id": vm_id}})
+        return create_response(request, "checkpoint", {"id": checkpoint_id, "vm": {"id": vm_id}})
     except HTTPException:
         raise
     except Exception as e:
@@ -136,7 +136,7 @@ async def list_vm_snapshots(vm_id: str, request: Request):
                 ovirt_snapshot["vm"] = {"id": vm_id}  # Add VM reference
                 all_snapshots.append(ovirt_snapshot)
         
-        return xml_response("snapshots", all_snapshots)
+        return create_response(request, "snapshots", all_snapshots)
     except HTTPException:
         raise
     except Exception as e:
@@ -178,7 +178,7 @@ async def create_vm_snapshot(vm_id: str, request: Request):
         # For simplicity, return the first snapshot created
         # In a real implementation, you might want to return a consolidated snapshot object
         if created_snapshots:
-            return xml_response("snapshot", created_snapshots[0])
+            return create_response(request, "snapshot", created_snapshots[0])
         else:
             # If no volumes were found, create a placeholder
             new_snapshot = {
@@ -189,7 +189,7 @@ async def create_vm_snapshot(vm_id: str, request: Request):
                 "persist_memorystate": False,
                 "vm": {"id": vm_id}
             }
-            return xml_response("snapshot", new_snapshot)
+            return create_response(request, "snapshot", new_snapshot)
     except HTTPException:
         raise
     except Exception as e:
@@ -233,7 +233,7 @@ async def get_vm_snapshot(vm_id: str, snapshot_id: str, request: Request):
         if not target_snapshot:
             raise HTTPException(status_code=404, detail="Snapshot not found")
         
-        return xml_response("snapshot", target_snapshot)
+        return create_response(request, "snapshot", target_snapshot)
     except HTTPException:
         raise
     except Exception as e:
@@ -269,7 +269,7 @@ async def restore_vm_from_snapshot(vm_id: str, snapshot_id: str, request: Reques
             "status": "restoring"
         }
         
-        return xml_response("snapshot", payload)
+        return create_response(request, "snapshot", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -300,7 +300,7 @@ async def delete_vm_snapshot(vm_id: str, snapshot_id: str, request: Request):
             pass
         
         # Return success response
-        return xml_response("snapshot", {"id": snapshot_id, "vm": {"id": vm_id}})
+        return create_response(request, "snapshot", {"id": snapshot_id, "vm": {"id": vm_id}})
     except HTTPException:
         raise
     except Exception as e:

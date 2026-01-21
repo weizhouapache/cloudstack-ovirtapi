@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 
 router = APIRouter()
@@ -51,7 +51,7 @@ async def list_vm_nics(vm_id: str, request: Request):
         # Convert nics to oVirt format
         nic_list = [cs_nic_to_ovirt(nic, vm_id) for nic in nics]
         
-        return xml_response("nics", nic_list)
+        return create_response(request, "nics", nic_list)
     except HTTPException:
         raise
     except Exception as e:
@@ -88,7 +88,7 @@ async def create_vm_nic(vm_id: str, request: Request):
         
         payload = cs_nic_to_ovirt(new_nic, vm_id)
         
-        return xml_response("nic", payload)
+        return create_response(request, "nic", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -123,7 +123,7 @@ async def get_vm_nic(vm_id: str, nic_id: str, request: Request):
         
         payload = cs_nic_to_ovirt(target_nic, vm_id)
         
-        return xml_response("nic", payload)
+        return create_response(request, "nic", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -163,7 +163,7 @@ async def update_vm_nic(vm_id: str, nic_id: str, request: Request):
         # For now, return the current NIC info to simulate update
         payload = cs_nic_to_ovirt(target_nic, vm_id)
         
-        return xml_response("nic", payload)
+        return create_response(request, "nic", payload)
     except HTTPException:
         raise
     except Exception as e:
@@ -192,7 +192,7 @@ async def delete_vm_nic(vm_id: str, nic_id: str, request: Request):
             "vm": {"id": vm_id}
         }
         
-        return xml_response("nic", payload)
+        return create_response(request, "nic", payload)
     except HTTPException:
         raise
     except Exception as e:

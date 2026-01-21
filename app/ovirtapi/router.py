@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import Response, FileResponse, StreamingResponse
-from app.utils.xml_builder import api_root_full
+from app.utils.response_builder import create_response, api_root_full
 from app.state.sessions import get_session, remove_session
 from app.cloudstack.client import cs_request
 
@@ -49,7 +49,8 @@ async def api_get(request: Request):
             headers={
                 "Content-Disposition": "attachment; filename=ovirt-engine-api-schema.xsd"}
         )
-    return api_root_full()
+    # Use content negotiation based on Accept header
+    return api_root_full(request)
 
 @router.api_route("/logout", methods=["GET", "POST"])
 async def logout(request: Request):

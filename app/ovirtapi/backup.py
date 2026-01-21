@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response, Request
 from app.cloudstack.client import cs_request
 from app.ovirtapi.backup_state import create_backup, get_backup
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 
 router = APIRouter()
 
@@ -33,7 +33,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
         "state": "ready",
     }
 
-    return xml_response("backup", payload)
+    return create_response(request, "backup", payload)
 
 @router.get("/vms/{vm_id}/backups/{backup_id}")
 async def get_backup_status(vm_id: str, backup_id: str, request: Request):
@@ -49,7 +49,7 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
         "checkpoints": checkpoints,
     }
 
-    return xml_response("backup", payload)
+    return create_response(request, "backup", payload)
 
 @router.post("/vms/{vm_id}/backups/{backup_id}/finalize")
 async def finalize_backup(vm_id: str, backup_id: str, request: Request):

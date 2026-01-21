@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 
 router = APIRouter()
@@ -34,7 +34,7 @@ async def get_image_extents(image_id: str, request: Request):
         "extents": extents
     }
     
-    return xml_response("extents", payload)
+    return create_response(request, "extents", payload)
 
 
 @router.get("/images/{image_id}")
@@ -72,7 +72,7 @@ async def get_image(image_id: str, request: Request):
                 "sparse": True,
             }
         
-        return xml_response("image", payload)
+        return create_response(request, "image", payload)
     
     except Exception:
         # If CS request fails, return simulated image
@@ -85,4 +85,4 @@ async def get_image(image_id: str, request: Request):
             "sparse": True,
         }
         
-        return xml_response("image", payload)
+        return create_response(request, "image", payload)

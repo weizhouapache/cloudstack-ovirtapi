@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import uuid
 
 router = APIRouter()
@@ -41,7 +41,7 @@ async def list_tags(request: Request):
                         "description": f"Tag for VM {vm_id}"
                     })
         
-        return xml_response("tags", all_tags)
+        return create_response(request, "tags", all_tags)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list tags: {str(e)}")
 
@@ -82,7 +82,7 @@ async def assign_tag_to_vm(vm_id: str, request: Request):
             "vm": {"id": vm_id}
         }
         
-        return xml_response("tag", payload)
+        return create_response(request, "tag", payload)
     except HTTPException:
         raise
     except Exception as e:

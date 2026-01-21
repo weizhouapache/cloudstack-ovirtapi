@@ -1,14 +1,6 @@
 from lxml.etree import Element, SubElement, tostring
 from fastapi import Response
 
-def api_root_full():
-    payload = {
-        "product_info": {
-            "name": "CloudStack oVirtAPI Server",
-            "vendor": "Wei Zhou",
-        }
-    }
-    return xml_response("api", payload)
 
 
 def _to_dict(obj):

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.utils.xml_builder import xml_response
+from app.utils.response_builder import create_response
 import time
 
 router = APIRouter()
@@ -74,8 +74,8 @@ async def get_job(job_id: str, request: Request):
                 jobs[job_id]["status"] = payload["status"]
                 jobs[job_id]["end_time"] = payload["end_time"]
         
-        return xml_response("job", payload)
-    
+        return create_response(request, "job", payload)
+
     except HTTPException:
         raise
     except Exception as e:
@@ -89,6 +89,6 @@ async def get_job(job_id: str, request: Request):
                 "start_time": job.get("start_time", ""),
                 "end_time": job.get("end_time", "")
             }
-            return xml_response("job", payload)
+            return create_response(request, "job", payload)
         else:
             raise HTTPException(status_code=404, detail="Job not found")
