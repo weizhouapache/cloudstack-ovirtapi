@@ -200,11 +200,16 @@ async def oauth_token(
             "token_type": "bearer"
         }
 
-        # Convert the data to JSON with indentation
-        json_data = json.dumps(data, indent=4)
+        # Convert the data to JSON
+        json_data = json.dumps(data)
 
-        # Return the JSON data as a response
-        return Response(json_data, media_type='application/json')
+        # Create response with required headers
+        response = Response(
+            content=json_data,
+            media_type='application/json'
+        )
+
+        return response
 
     except HTTPException:
         raise

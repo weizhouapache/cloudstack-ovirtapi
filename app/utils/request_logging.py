@@ -44,11 +44,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         process_time = time.time() - start_time
+        content_length = response.headers.get("content-length")
 
         # Log response
         logger.info(
             f"{method} {path} - "
             f"Status: {response.status_code} - "
+            f"Content-Length: {content_length} - "
             f"Duration: {process_time:.3f}s"
         )
 

@@ -155,7 +155,12 @@ def create_ca_signed_cert(cert_file, key_file, ca_cert_file, ca_key_file, host_i
         ))
 
     # Intialize COMMON name
-    common_name = host_ip
+    import socket
+    host_name = socket.gethostname()
+    if host_name:
+        common_name = host_name
+    else :
+        common_name = host_ip
 
     # Build Subject Alternative Names
     san_list = [x509.DNSName("localhost")]

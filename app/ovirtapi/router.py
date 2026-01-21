@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Request, Response, Depends
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import Response, FileResponse, StreamingResponse
 from app.utils.xml_builder import api_root_full
 from app.state.sessions import get_session, remove_session
 from app.cloudstack.client import cs_request
@@ -18,6 +19,8 @@ from app.ovirtapi.vmnics import router as vmnics_router
 from app.ovirtapi.vmsnapshots import router as vmsnapshots_router
 from app.ovirtapi.tags import router as tags_router
 from app.ovirtapi.vnicprofiles import router as vnicprofiles_router
+
+import uuid
 
 router.include_router(infra_router)
 router.include_router(vm_router)
@@ -39,6 +42,13 @@ async def api_head(request: Request):
 
 @router.get("")
 async def api_get(request: Request):
+    if "schema" in request.query_params:
+        return StreamingResponse(
+            open("ovirt-engine-api-schema.xsd", "rb"),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": "attachment; filename=ovirt-engine-api-schema.xsd"}
+        )
     return api_root_full()
 
 @router.api_route("/logout", methods=["GET", "POST"])
