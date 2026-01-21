@@ -6,7 +6,6 @@ def api_root_full():
         "product_info": {
             "name": "CloudStack oVirtAPI Server",
             "vendor": "Wei Zhou",
-            "version": "1.0"
         }
     }
     return xml_response("api", payload)
