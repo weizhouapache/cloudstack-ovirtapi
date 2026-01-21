@@ -1,5 +1,6 @@
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from app.security.hashing import hash_auth
 from app.state.sessions import get_session, store_session
 from app.cloudstack.client import cs_request
@@ -21,6 +22,34 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         if "/services/" in request.url.path or "/sso/" in request.url.path:
             return await call_next(request)
 
+        # Check if this is an API request
+        if "/api" in request.url.path:
+            auth_header = request.headers.get("Authorization")
+            if not auth_header:
+                # Return HTML error for missing headers
+                html_content = "<html><head><title>Error</title></head><body>Unauthorized</body></html>"
+                logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
+                return Response(content=html_content, status_code=401, media_type="text/html")
+
+            elif auth_header.startswith("Bearer"):
+                # Handle OAuth Bearer token
+                token = auth_header[7:].strip()
+                from app.ovirtapi.oauth import get_token_info
+                token_info = get_token_info(token)
+
+                if not token_info:
+                    # Return HTML error for invalid/expired token
+                    html_content = "<html><head><title>Error</title></head><body>invalid_grant: The provided authorization grant for the auth code has expired.</body></html>"
+                    logger.warning(f"Invalid or expired OAuth token")
+                    return Response(content=html_content, status_code=401, media_type="text/html")
+
+                # Store token info in request state
+                request.state.auth_hash = hash_auth(token)
+                request.state.token_info = token_info
+                logger.debug(f"OAuth token validated for user: {token_info.get('username')}")
+                return await call_next(request)
+
+        # For non-API routes or routes with Basic auth
         auth_header = request.headers.get("Authorization")
         if not auth_header:
             logger.warning(f"Missing authorization header for {request.method} {request.url.path}")
@@ -112,7 +141,7 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         and return updated session data.
         """
         if "sessionkey" not in session_data or "userid" not in session_data:
-            raise ValueError("session_data must include 'sessionkey' and 'userid'")
+            raise HTTPException(status_code=401, detail="Session data missing required fields")
 
         params = {
             "id": session_data["userid"],
@@ -126,7 +155,7 @@ class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):
         # Extract apikey and secretkey
         userkeys = resp.get("getuserkeysresponse", {}).get("userkeys", [])
         if not userkeys:
-            raise ValueError("No user keys returned by CloudStack")
+            raise HTTPException(status_code=401, detail="No user keys returned by CloudStack")
 
         session_data["apikey"] = userkeys["apikey"]
         session_data["secretkey"] = userkeys["secretkey"]
