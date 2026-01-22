@@ -215,6 +215,7 @@ async def create_disk(request: Request):
             if not storage:
                 raise HTTPException(status_code=400, detail="Storage domain is not found")
             cs_params["zoneid"] = storage[0].get("zoneid")
+            cs_params["storageid"] = storage[0].get("id")
 
         if "diskofferingid" in disk_params:
             cs_params["diskofferingid"] = disk_params["diskofferingid"]
