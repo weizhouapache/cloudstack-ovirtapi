@@ -19,8 +19,16 @@ def create_response(request: Request, root_name: str, payload, status_code: int 
     if content_type == "application/xml":
         return xml_response(root_name, payload, status_code)
 
+    # Special handling to match oVirt API format
+    # For VMs, the JSON response should be {"vm": [...]} instead of {"vms": [...]}
+    if isinstance(payload, list):
+        root_name = root_name[:-1]
+        json_payload = {root_name: payload}
+    else:
+        json_payload = payload
+
     # Default to JSON response
-    return json_response(payload, status_code)
+    return json_response(json_payload, status_code)
 
 def api_root_full(request=None):
     """

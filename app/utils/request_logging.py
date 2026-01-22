@@ -3,6 +3,7 @@ import time
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +21,42 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         query_string = str(request.url.query) if request.url.query else None
         full_url = str(request.url)
 
-        # Log incoming request
+        # Log incoming request with troubleshooting details
         log_msg = f"{method} {path}"
         if query_string:
             log_msg += f"?{query_string}"
         log_msg += f" - IP: {client_ip}"
         if request.headers.get("user-agent"):
             log_msg += f" - UA: {request.headers.get('user-agent')[:50]}"
+
+        # Troubleshooting: Log all request headers
+        logger.debug(f"Request headers: {dict(request.headers)}")
+
+        # Troubleshooting: Log POST data or other request parameters
+        if method.upper() == "POST":
+            # For POST requests, read the body now before it gets consumed
+            try:
+                body = await request.body()
+                if body:
+                    logger.debug(f"POST data: {body.decode('utf-8')}")
+                else:
+                    logger.debug("POST data: (empty)")
+
+                # To allow downstream handlers to read the body again, we need to recreate the request
+                # with the same body content. This is a bit complex but necessary for proper middleware behavior.
+                from starlette.datastructures import UploadFile
+                import io
+
+                # Store the body for potential reuse if needed by downstream handlers
+                request._body = body
+            except:
+                logger.debug("POST data: (could not read)")
+        else:
+            # For other methods, log query parameters immediately
+            if query_string:
+                logger.debug(f"Query parameters: {query_string}")
+            else:
+                logger.debug("Query parameters: (none)")
 
         logger.info(log_msg)
 
@@ -44,7 +74,23 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             raise
 
         process_time = time.time() - start_time
+
+        # Get content length from response
         content_length = response.headers.get("content-length")
+        if content_length is None:
+            # For regular responses, try to get body length
+            try:
+                if hasattr(response, 'body') and response.body:
+                    if isinstance(response.body, bytes):
+                        content_length = len(response.body)
+                    elif isinstance(response.body, str):
+                        content_length = len(response.body.encode('utf-8'))
+                    else:
+                        content_length = len(str(response.body).encode('utf-8'))
+                else:
+                    content_length = 0
+            except:
+                content_length = "unknown"
 
         # Log response
         logger.info(
