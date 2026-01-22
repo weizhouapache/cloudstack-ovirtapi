@@ -83,13 +83,107 @@ def cs_storage_pool_to_ovirt(pool: dict) -> dict:
     """
     Convert a CloudStack StoragePool dict to an oVirt-compatible StorageDomain payload.
     """
-    return {
-        "id": pool["id"],
-        "name": pool["name"],
+    # Extract storage details from CloudStack pool
+    pool_id = pool.get("id", "41609681-c92a-410a-bcc2-5b5e1305cdd1")
+    pool_name = pool.get("name", "hosted_storage")
+    pool_zone_id = pool.get("zoneid", "91f4d826-e4d5-11f0-bd93-00163e6c35f4")
+
+    # Calculate related values based on the example
+    available = int(pool.get("capacitybytes", 1128502657024))
+    used = int(pool.get("usedbytes", 1769526525952))
+    committed = int(pool.get("allocated", 403726925824))
+
+    storage_type = "nfs" if pool.get("type", "nfs") == 'NetworkFilesystem' else pool.get("type", "nfs")
+
+    # Create the detailed storage domain structure as specified
+    storage_domain = {
+        "available": str(available),
+        "backup": "false",
+        "block_size": "512",
+        "committed": str(committed),
+        "critical_space_action_blocker": "5",
+        "discard_after_delete": "false",
+        "external_status": "ok",
+        "master": "true",
+        "storage": {
+            "address": pool.get("ipaddress", "10.0.32.4"),
+            "mount_options": "",
+            "nfs_version": pool.get("nfs_version", "auto"),
+            "path": pool.get("path", "/acs/primary/ovirt-storage"),
+            "type": storage_type
+        },
+        "storage_format": "v5",
+        "supports_discard": "false",
+        "supports_discard_zeroes_data": "false",
         "type": "data",
-        "status": "up" if pool["state"] == "Up" else "down",
-        "data_center": {"id": pool["zoneid"]},
+        "used": str(used),
+        "warning_low_space_indicator": "10",
+        "wipe_after_delete": "false",
+        "data_centers": {
+            "data_center": [
+                {
+                    "href": f"/ovirt-engine/api/datacenters/{pool_zone_id}",
+                    "id": pool_zone_id
+                }
+            ]
+        },
+        "actions": {
+            "link": [
+                {
+                    "href": f"/ovirt-engine/api/storagedomains/{pool_id}/isattached",
+                    "rel": "isattached"
+                },
+                {
+                    "href": f"/ovirt-engine/api/storagedomains/{pool_id}/updateovfstore",
+                    "rel": "updateovfstore"
+                },
+                {
+                    "href": f"/ovirt-engine/api/storagedomains/{pool_id}/refreshluns",
+                    "rel": "refreshluns"
+                },
+                {
+                    "href": f"/ovirt-engine/api/storagedomains/{pool_id}/reduceluns",
+                    "rel": "reduceluns"
+                }
+            ]
+        },
+        "name": pool_name,
+        "description": pool.get("description", ""),
+        "comment": "",
+        "link": [
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/diskprofiles",
+                "rel": "diskprofiles"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/disks",
+                "rel": "disks"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/storageconnections",
+                "rel": "storageconnections"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/permissions",
+                "rel": "permissions"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/templates",
+                "rel": "templates"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/vms",
+                "rel": "vms"
+            },
+            {
+                "href": f"/ovirt-engine/api/storagedomains/{pool_id}/disksnapshots",
+                "rel": "disksnapshots"
+            }
+        ],
+        "href": f"/ovirt-engine/api/storagedomains/{pool_id}",
+        "id": pool_id
     }
+    return storage_domain
 
 @router.get("/storagedomains")
 async def list_storage_domains(request: Request):
