@@ -52,5 +52,9 @@ def setup_logging():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
+    # Suppress httpcore and multipart logging
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("multipart").setLevel(logging.WARNING)
+
     return logger
 
