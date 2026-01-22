@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
+from app.utils.async_job import wait_for_job, get_job_id
+
+import json
 
 router = APIRouter()
 
@@ -178,3 +181,70 @@ async def reduce_disk(disk_id: str, request: Request):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reduce disk: {str(e)}")
+
+@router.post("/disks")
+async def create_disk(request: Request):
+    """
+    Creates a new disk.
+    
+    Expects a JSON payload with disk parameters.
+    """
+    try:
+        # Get the request body to extract disk parameters
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        disk_params = json.loads(body_str) if body_str else {}
+        
+        # Extract parameters from the request
+        disk_name = disk_params.get("name", "new-disk")
+        disk_size = disk_params.get("provisioned_size", 10737418240)  # 10GB default
+        
+        # Prepare parameters for CloudStack createVolume API
+        cs_params = {
+            "name": disk_name,
+            "size": str(int(disk_size / (1024 * 1024 * 1024))),  # Convert to string for API call
+        }
+        
+        # Add additional parameters if provided
+        if "zoneid" in disk_params:
+            cs_params["zoneid"] = disk_params["zoneid"]
+        elif "storage_domains" in disk_params:
+            storage_domain = disk_params.get("storage_domains", {}).get("storage_domain",[])
+            storage_data = await cs_request(request, "listStoragePools", {"id": storage_domain[0].get("id")})
+            storage = storage_data["liststoragepoolsresponse"].get("storagepool", [])
+            if not storage:
+                raise HTTPException(status_code=400, detail="Storage domain is not found")
+            cs_params["zoneid"] = storage[0].get("zoneid")
+
+        if "diskofferingid" in disk_params:
+            cs_params["diskofferingid"] = disk_params["diskofferingid"]
+        else:
+            offerings_data = await cs_request(request, "listDiskOfferings", {"storagetype": "shared", "name": "Custom"})
+            offerings = offerings_data["listdiskofferingsresponse"].get("diskoffering", [])
+            if not offerings:
+                raise HTTPException(status_code=400, detail="Custom disk offering is required")
+            cs_params["diskofferingid"] = offerings[0].get("id", "")
+        
+        # Call CloudStack API to create the volume
+        data = await cs_request(request, "createVolume", cs_params)
+       
+        # Check for job response (async)
+        job_id = get_job_id(data)
+
+        # Wait for async job to complete
+        job_result = await wait_for_job(request, job_id)
+
+        # Extract the created volume from the response
+        volume = job_result.get("volume", {})
+        
+        # Convert to oVirt format and return
+        payload = cs_volume_to_ovirt(volume)
+        
+        return create_response(request, "disk", payload)
+        
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Missing required parameter: {str(e)}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create disk: {str(e)}")
