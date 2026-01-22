@@ -3,6 +3,10 @@ from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 import uuid
 import time
+import json
+
+from app.config import SERVER
+from app.security.certs import get_default_ip
 
 router = APIRouter()
 
@@ -30,8 +34,25 @@ async def create_image_transfer(request: Request):
     This simulates the process of transferring a disk image, which is important
     for backup and restore operations in Veeam integration.
     """
+
+    # Get bind IP
+    bind_ip = SERVER.get("host", "0.0.0.0")
+    public_ip = SERVER.get("public_ip", "").strip()
+    if public_ip:
+        bind_ip = public_ip
+    elif bind_ip == "0.0.0.0":
+        bind_ip = get_default_ip()
+
+    # Get the request body to extract disk parameters
+    body_bytes = await request.body()
+    body_str = body_bytes.decode("utf-8")
+    imagetransfer_params = json.loads(body_str) if body_str else {}
+    volume_id = imagetransfer_params.get("disk", {}).get("id")
+    direction = imagetransfer_params.get("direction", "upload")
+
     # Generate a unique transfer ID
-    transfer_id = str(uuid.uuid4())
+    #transfer_id = str(uuid.uuid4())
+    transfer_id = "d953b972-9abe-415a-808a-b20046510b38"
     
     # Create a new image transfer record
     transfer_data = {
@@ -40,8 +61,8 @@ async def create_image_transfer(request: Request):
         "created_at": time.time(),
         "expires_at": time.time() + 3600,  # Expires in 1 hour
         "phase": "transferring",
-        "transfer_url": f"https://localhost:443/images/{transfer_id}/extents",  # Placeholder
-        "signed_ticket": f"ticket_{transfer_id}"  # Placeholder for security ticket
+        "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
+        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}"
     }
     
     # Store the transfer
@@ -53,7 +74,7 @@ async def create_image_transfer(request: Request):
         "status": transfer_data["status"],
         "phase": transfer_data["phase"],
         "transfer_url": transfer_data["transfer_url"],
-        "signed_ticket": transfer_data["signed_ticket"]
+        "proxy_url": transfer_data["proxy_url"]
     }
     
     return create_response(request, "image_transfer", payload)
@@ -80,7 +101,7 @@ async def get_image_transfer(transfer_id: str, request: Request):
         "status": transfer["status"],
         "phase": transfer["phase"],
         "transfer_url": transfer["transfer_url"],
-        "signed_ticket": transfer["signed_ticket"]
+        "proxy_url": transfer["proxy_url"]
     }
     
     return create_response(request, "image_transfer", payload)
