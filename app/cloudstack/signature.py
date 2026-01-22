@@ -18,7 +18,7 @@ def generate_signature(params: dict, secretkey: str) -> str:
     sorted_params = sorted((k.lower(), v) for k, v in params.items())
 
     # 2. build query string
-    query_string = "&".join(f"{k}={quote_plus(str(v))}" for k, v in sorted_params)
+    query_string = "&".join(f"{k}={quote_plus(str(v)).replace('+', '%20')}" for k, v in sorted_params)
 
     # 3. HMAC-SHA1 & Base64
     signature = base64.b64encode(
