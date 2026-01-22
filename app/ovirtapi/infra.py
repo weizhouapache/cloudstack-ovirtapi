@@ -44,6 +44,18 @@ async def list_clusters(request: Request):
 
     return create_response(request, "clusters", payload)
 
+@router.get("/clusters/{cluster_id}")
+async def get_cluster(cluster_id: str, request: Request):
+    data = await cs_request(request, "listClusters", {"id": cluster_id})
+    clusters = data["listclustersresponse"].get("cluster", [])
+
+    if not clusters:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    cluster = cs_cluster_to_ovirt(clusters[0])
+
+    return create_response(request, "cluster", cluster)
+
 def cs_host_to_ovirt(host: dict) -> dict:
     """
     Convert a CloudStack Host dict to an oVirt-compatible Host payload.
@@ -52,7 +64,7 @@ def cs_host_to_ovirt(host: dict) -> dict:
     return {
         "id": host["id"],
         "name": host["name"],
-        "type": "kvm",
+        "type": "rhel",
         "cluster": {"id": host["clusterid"]},
         "status": "up" if state == "up" else "down",
     }
