@@ -4,6 +4,7 @@ from app.utils.response_builder import create_response
 import uuid
 import time
 import json
+import httpx
 
 from app.config import SERVER
 from app.security.certs import get_default_ip
@@ -30,18 +31,10 @@ def cs_volume_to_ovirt(volume: dict) -> dict:
 async def create_image_transfer(request: Request):
     """
     Creates a new image transfer.
-    
+
     This simulates the process of transferring a disk image, which is important
     for backup and restore operations in Veeam integration.
     """
-
-    # Get bind IP
-    bind_ip = SERVER.get("host", "0.0.0.0")
-    public_ip = SERVER.get("public_ip", "").strip()
-    if public_ip:
-        bind_ip = public_ip
-    elif bind_ip == "0.0.0.0":
-        bind_ip = get_default_ip()
 
     # Get the request body to extract disk parameters
     body_bytes = await request.body()
@@ -50,10 +43,67 @@ async def create_image_transfer(request: Request):
     volume_id = imagetransfer_params.get("disk", {}).get("id")
     direction = imagetransfer_params.get("direction", "upload")
 
-    # Generate a unique transfer ID
-    #transfer_id = str(uuid.uuid4())
-    transfer_id = "d953b972-9abe-415a-808a-b20046510b38"
-    
+    # Get volume information from CloudStack
+    if not volume_id:
+        raise HTTPException(status_code=400, detail="Volume ID is required")
+        
+    try:
+        volume_data = await cs_request(request, "listVolumes", {"id": volume_id})
+        volumes = volume_data["listvolumesresponse"].get("volume", [])
+        if volumes:
+            volume_info = volumes[0]
+            # Extract relevant information from CloudStack volume
+            volume_path = f"/mnt/{volume_info.get('storage')}/{volume_info.get('path')}"
+            volume_format = "qcow2"  # Default format, could be determined from volume
+            volume_size = volume_info.get("size")
+        else:
+            raise HTTPException(status_code=400, detail="Volume is not found")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Cannot get volume information")
+
+
+    # Prepare payload for imageio service based on direction
+    if direction == "download":
+        # For download, we need to provide the path to the disk
+        payload = {
+            "id": volume_id,
+            "path": volume_path,  # Use path from CloudStack
+            "format": volume_format  # Use format from CloudStack
+        }
+        # Call imageio service to create download transfer
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.post(
+                f"https://localhost:54322/images/download",
+                json=payload
+            )
+            if response.status_code == 200:
+                imageio_response = response.json()
+            else:
+                raise HTTPException(status_code=400, detail="Cannot get URLs for download")
+
+    else:  # upload
+        # For upload, we need to specify where to store the uploaded data
+        payload = {
+            "path": volume_path,  # Use path from CloudStack
+            "format": volume_format,  # Use format from CloudStack
+            "size": volume_size  # Use size from CloudStack
+        }
+        # Call imageio service to create upload transfer
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.post(
+                f"https://localhost:54322/images/upload",
+                json=payload
+            )
+            if response.status_code == 200:
+                imageio_response = response.json()
+            else:
+                raise HTTPException(status_code=400, detail="Cannot get URLs for upload")
+
+    # Extract transfer ID from imageio response
+    transfer_id = imageio_response.get("id")
+    transfer_url = imageio_response.get("transfer_url")
+    proxy_url = imageio_response.get("proxy_url")
+
     # Create a new image transfer record
     transfer_data = {
         "id": transfer_id,
@@ -61,13 +111,14 @@ async def create_image_transfer(request: Request):
         "created_at": time.time(),
         "expires_at": time.time() + 3600,  # Expires in 1 hour
         "phase": "transferring",
-        "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
-        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}"
+        "transfer_url": transfer_url,
+        "proxy_url": proxy_url,
+        "direction": direction
     }
-    
+
     # Store the transfer
     image_transfers[transfer_id] = transfer_data
-    
+
     # Return the transfer information
     payload = {
         "id": transfer_id,
@@ -76,8 +127,36 @@ async def create_image_transfer(request: Request):
         "transfer_url": transfer_data["transfer_url"],
         "proxy_url": transfer_data["proxy_url"]
     }
-    
+
     return create_response(request, "image_transfer", payload)
+
+
+@router.get("/imagetransfers")
+async def list_image_transfers(request: Request):
+    """
+    Lists all image transfers.
+    """
+    # Update status for all transfers based on time elapsed
+    current_time = time.time()
+    for transfer_id, transfer in image_transfers.items():
+        if current_time > transfer["expires_at"]:
+            transfer["status"] = "expired"
+            transfer["phase"] = "failed"
+
+    # Prepare the list of transfers
+    transfers_list = []
+    for transfer_id, transfer in image_transfers.items():
+        transfer_info = {
+            "id": transfer["id"],
+            "status": transfer["status"],
+            "phase": transfer["phase"],
+            "transfer_url": transfer["transfer_url"],
+            "proxy_url": transfer["proxy_url"]
+        }
+        transfers_list.append(transfer_info)
+
+    payload = transfers_list
+    return create_response(request, "image_transfers", payload)
 
 
 @router.get("/imagetransfers/{transfer_id}")
@@ -119,7 +198,7 @@ async def finalize_image_transfer(transfer_id: str, request: Request):
     
     # Update transfer status to finalized
     transfer["status"] = "completed"
-    transfer["phase"] = "finished"
+    transfer["phase"] = "finished_success"
     transfer["finalized_at"] = time.time()
     
     # Return success response
