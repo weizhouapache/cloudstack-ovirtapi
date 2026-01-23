@@ -10,6 +10,7 @@ import uvicorn
 import threading
 from imageio.logging import setup_logging
 from app.security.certs import ensure_certificates
+from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
 
 # Setup logging similar to main.py
@@ -20,6 +21,15 @@ logger.info("Starting oVirt ImageIO Server")
 # Ensure certificates exist
 cert_file, key_file, ca_cert_file = ensure_certificates()
 logger.info(f"Using certificates: {cert_file}, {key_file}, CA: {ca_cert_file}")
+
+# Get bind IP
+bind_ip = IMAGEIO.get("host", "0.0.0.0")
+public_ip = IMAGEIO.get("public_ip", "").strip()
+if public_ip:
+    bind_ip = public_ip
+elif bind_ip == "0.0.0.0":
+    bind_ip = get_default_ip()
+
 
 # =========================
 # Shared in-memory registry
@@ -127,8 +137,9 @@ def create_download_transfer(payload: dict):
 
     return {
         "id": transfer_id,
-        "download_url": f"https://localhost:54322/images/{transfer_id}",
-        "extents_url": f"https://localhost:54322/images/{transfer_id}/extents"
+        "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
+        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}",
+        "extents_url": f"https://{bind_ip}:54322/images/{transfer_id}/extents"
     }
 
 # ---- Create upload transfer ----
@@ -150,9 +161,12 @@ def create_upload_transfer(payload: dict):
 
     # Pre-create file
     size = payload.get("size")
-    if size:
+    if size and fmt == "raw":
         with open(file_path, "wb") as f:
             f.truncate(size)
+    elif fmt == "qcow2":
+        with open(file_path, "wb") as f:
+            f.truncate(0)
 
     transfers[transfer_id] = {
         "file_path": file_path,
@@ -162,7 +176,8 @@ def create_upload_transfer(payload: dict):
 
     return {
         "id": transfer_id,
-        "upload_url": f"https://localhost:54322/images/{transfer_id}"
+        "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
+        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}"
     }
 
 # ---- EXTENTS endpoint ----
@@ -257,30 +272,35 @@ def download_transfer(transfer_id: str, request: Request):
 # ---- UPLOAD / RESTORE (PUT with Range) ----
 
 @imageio_router.put("/{transfer_id}")
-def upload_transfer(transfer_id: str, request: Request):
+async def upload_transfer(transfer_id: str, request: Request):
     t = transfers.get(transfer_id)
     if not t or t["mode"] != "upload":
         raise HTTPException(404)
 
     file_path = t["file_path"]
+    logger.debug(f"uploading to file {file_path}")
 
     range_header = request.headers.get("content-range")
     if not range_header:
-        raise HTTPException(400, "Content-Range required")
+        with open(file_path, "r+b") as f:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                f.write(chunk)
 
-    # Example: bytes 0-1048575/10737418240
-    _, rest = range_header.split(" ")
-    range_part, _ = rest.split("/")
-    start_s, end_s = range_part.split("-")
-    start = int(start_s)
-    end = int(end_s)
+    else:
+        # Example: bytes 2097152-2162687
+        _, range_part = range_header.split(" ")
+        start_s, end_s = range_part.split("-")
+        start = int(start_s)
+        end = int(end_s)
 
-    data = request.stream()
-
-    with open(file_path, "r+b") as f:
-        f.seek(start)
-        for chunk in data:
-            f.write(chunk)
+        with open(file_path, "r+b") as f:
+            f.seek(start)
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                f.write(chunk)
 
     return Response(status_code=204)
 
