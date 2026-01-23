@@ -43,4 +43,4 @@ else
 fi
 
 echo "Starting the application..."
-sudo python -m app.main >/dev/null 2>&1 &
+sudo python -m imageio.service >/dev/null 2>&1 &

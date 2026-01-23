@@ -4,7 +4,7 @@
 echo "Stopping the CloudStack oVirt-Compatible API Server..."
 
 # Find the process ID of the application
-PID=$(ps aux | grep "python -m app.main" | grep -v grep | awk "{print \$2}")
+PID=$(ps aux | grep "python -m imageio.service" | grep -v grep | awk "{print \$2}")
 
 if [ -n "$PID" ]; then
     echo "Found process with PID: $PID"
