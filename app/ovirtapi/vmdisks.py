@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request, HTTPException, Query
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
+from app.utils.async_job import wait_for_job, get_job_id
+
+import json
 
 router = APIRouter()
 
@@ -67,20 +70,38 @@ async def attach_disk(vm_id: str, request: Request):
         if not vms:
             raise HTTPException(status_code=404, detail="VM not found")
         
-        # In a real implementation, we would expect request body with disk ID
-        # For now, we'll simulate the attachment process
-        # This would typically involve calling attachVolume API with vm_id and volume_id
-        
-        # Return a simulated response
+
+        # Get volume from request
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        diskattachment_params = json.loads(body_str) if body_str else {}
+        disk_id = diskattachment_params.get("disk_attachment").get("disk").get("id")
+
+        cs_params = {
+            "id": disk_id,
+            "virtualmachineid": vm_id,
+        }
+
+        # Call CloudStack API to create the VM
+        data = await cs_request(request, "attachVolume", cs_params)
+
+        # Check for job response (async)
+        job_id = get_job_id(data)
+        if job_id:
+            # Wait for async job to complete
+            job_result = await wait_for_job(request, job_id)
+            volume = job_result.get("volume", {})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to attach Volume - job failed")
+
+        # Return a response
         payload = {
-            "id": f"{vm_id}-new-attachment",
-            "vm": {"id": vm_id},
-            "disk": {"id": "simulated-new-disk-id"},
+            "disk": {"id": disk_id},
             "active": True,
             "interface": "virtio",
             "bootable": False
         }
-        
+
         return create_response(request, "disk_attachment", payload)
     except HTTPException:
         raise
