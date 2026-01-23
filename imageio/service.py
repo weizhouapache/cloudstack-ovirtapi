@@ -304,6 +304,22 @@ async def upload_transfer(transfer_id: str, request: Request):
 
     return Response(status_code=204)
 
+
+@imageio_router.options("/{transfer_id}")
+async def options_imageio(transfer_id: str, request: Request):
+    """
+    OPTIONS method for individual imagetransfer endpoint.
+    Used for CORS preflight requests.
+    """
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, Range, Content-Range, Accept, Destination, Overwrite",
+        }
+    )
+
 # =========================
 # Run ImageIO Service
 # =========================
