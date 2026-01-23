@@ -3,6 +3,8 @@ from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
 
+import json
+
 router = APIRouter()
 
 def cs_vm_to_ovirt(vm: dict) -> dict:
@@ -554,6 +556,149 @@ async def stop_vm(vm_id: str, request: Request):
 
     payload = cs_vm_to_ovirt(vm)
     return create_response(request, "vm", payload)
+
+@router.post("/vms")
+async def create_vm(request: Request):
+    """
+    Creates a new VM from the provided configuration.
+
+    Expects a JSON payload with VM parameters.
+    """
+    try:
+        # Get the request body to extract VM parameters
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        vm_params = json.loads(body_str) if body_str else {}
+
+        # Extract VM parameters from the request
+        vm_name = vm_params.get("name", "new-vm")
+        vm_description = vm_params.get("description", "Created via API")
+        vm_memory = vm_params.get("memory", 1073741824)  # Default 1GB
+        vm_stateless = vm_params.get("stateless", False)
+        vm_type = vm_params.get("type", "server")
+
+        # Extract CPU information
+        cpu_info = vm_params.get("cpu", {})
+        cpu_arch = cpu_info.get("architecture", "x86_64")
+        cpu_topology = cpu_info.get("topology", {})
+        cpu_cores = cpu_topology.get("cores", 1)
+        cpu_sockets = cpu_topology.get("sockets", 1)
+        cpu_threads = cpu_topology.get("threads", 1)
+
+        # Extract cluster information
+        cluster_info = vm_params.get("cluster", {})
+        cluster_id = cluster_info.get("id", "")
+
+        # Extract BIOS settings
+        bios_info = vm_params.get("bios", {})
+        bios_type = bios_info.get("type", "q35_secure_boot")
+
+        # Extract memory policy
+        memory_policy = vm_params.get("memory_policy", {})
+        memory_guaranteed = memory_policy.get("guaranteed", vm_memory)
+        memory_max = memory_policy.get("max", vm_memory)
+
+        # Prepare parameters for CloudStack deployVirtualMachine API
+        # First, we need to determine appropriate service offering based on CPU and memory
+        # For now, we'll use a default service offering, but in a real implementation
+        # we would need to query CloudStack for an appropriate offering
+
+        # Find or create the service offering with name "Veeam Custom"
+        # First, try to find the service offering by name
+        try:
+            offering_data = await cs_request(request, "listServiceOfferings", {"name": "Veeam Custom"})
+            offerings = offering_data.get("listserviceofferingsresponse", {}).get("serviceoffering", [])
+
+            if offerings:
+                # Use existing service offering
+                service_offering_id = offerings[0]["id"]
+            else:
+                # Service offering doesn't exist, create a custom one
+                # Calculate CPU cores from topology
+                cpu_cores_total = cpu_cores * cpu_sockets  # Total cores based on topology
+
+                # Create custom service offering
+                create_offering_params = {
+                    "name": "Veeam Custom",
+                    "displaytext": "Custom service offering for Veeam backups",
+                    "customized": "true",
+                }
+
+                # Create the service offering
+                create_result = await cs_request(request, "createServiceOffering", create_offering_params, method = "POST")
+                service_offering_id = create_result["createserviceofferingresponse"]["serviceoffering"]["id"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail="Failed to find or create service offering 'Veeam Custom'")
+
+        # Extract initialization parameters if provided
+        initialization = vm_params.get("initialization", {})
+        custom_script = initialization.get("custom_script", "")
+
+        cs_params = {
+            "name": vm_name,
+            "displayname": vm_description,
+            "serviceofferingid": service_offering_id,
+            "templateid": "1"  # Using default template, in real implementation would need to determine appropriate template
+        }
+
+        # Add user data (custom script) if provided
+        if custom_script:
+            # CloudStack supports user data via the 'userdata' parameter
+            import base64
+            # Encode the custom script in base64 as required by CloudStack
+            encoded_userdata = base64.b64encode(custom_script.encode()).decode()
+            cs_params["userdata"] = encoded_userdata
+
+        # Add zone/cluster information if provided
+        if cluster_id:
+            # If cluster_id is provided, we can use it as zoneid for CloudStack
+            # Alternatively, we might need to look up the actual zone ID
+            try:
+                cluster_data = await cs_request(request, "listClusters", {"id": cluster_id})
+                clusters = cluster_data["listclustersresponse"].get("cluster", [])
+                if clusters:
+                    # Use the zone ID from the cluster
+                    zone_id = clusters[0].get("zoneid")
+                    if zone_id:
+                        cs_params["zoneid"] = zone_id
+                    else:
+                        # If no zone ID found in cluster, use cluster_id as zoneid
+                        cs_params["zoneid"] = cluster_id
+                else:
+                    # If cluster not found, use cluster_id as zoneid
+                    cs_params["zoneid"] = cluster_id
+            except:
+                # If there's an error looking up the cluster, use cluster_id as zoneid
+                cs_params["zoneid"] = cluster_id
+
+        # Call CloudStack API to create the VM
+        data = await cs_request(request, "deployVirtualMachine", cs_params, method="POST")
+
+        # Handle potential async job response
+        if "jobid" in data.get("deployvirtualmachineresponse", {}):
+            # Async job was started, need to wait for completion
+            job_id = data["deployvirtualmachineresponse"]["jobid"]
+            job_result = await wait_for_job(request, job_id)
+            vm = job_result.get("virtualmachine", {})
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create VM - job failed")
+
+        # If we don't have a VM at this point, there was an issue
+        if not vm:
+            raise HTTPException(status_code=500, detail="Failed to create VM - no VM returned from CloudStack")
+
+        # Convert to oVirt format and return
+        payload = cs_vm_to_ovirt(vm)
+
+        return create_response(request, "vm", payload)
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Missing required parameter: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create VM: {str(e)}")
+
 
 @router.post("/vms/{vm_id}/shutdown")
 async def shutdown_vm(vm_id: str, request: Request):
