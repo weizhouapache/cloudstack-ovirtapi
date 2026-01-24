@@ -13,7 +13,28 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
     """
 
     vm_id = vm.get("id", "NULL")
-    vm_status = "up" if vm.get("state", "down").lower() == "running" else vm.get("state", "down").lower()
+
+    # Use match/case to determine VM status
+    vm_state = vm.get("state", "down").lower()
+    match vm_state:
+        case "running":
+            vm_status = "up"
+        case "stopped" | "error" | "shutdown":
+            vm_status = "down"
+        case "stopping":
+            vm_status = "powering_down"
+        case "starting":
+            vm_status = "powering_up"
+        case "migrating":
+            vm_status = "migrating"
+        case "restoring":
+            vm_status = "restoring_state"
+        case "destroyed" | "expunging":
+            vm_status = "down"
+        case "unknown":
+            vm_status = "unknown"
+        case _:
+            vm_status = vm_state
 
     # Create the detailed VM structure as specified
     detailed_vm = {
@@ -634,11 +655,19 @@ async def create_vm(request: Request):
         initialization = vm_params.get("initialization", {})
         custom_script = initialization.get("custom_script", "")
 
+        # TODO: remove this
+        cpu_cores_total = 2
+        memory_guaranteed = str(4096 * 1024 * 1024)
+
         cs_params = {
             "name": vm_name,
             "displayname": vm_description,
             "serviceofferingid": service_offering_id,
-            "templateid": "1"  # Using default template, in real implementation would need to determine appropriate template
+            "hypervisor": "KVM",
+            "dummy": True,
+            "details[0].cpuNumber": cpu_cores_total,          # total CPU cores
+            "details[0].cpuSpeed": 1000,        # hardcoded
+            "details[0].memory": int(int(memory_guaranteed) / 1024 / 1024)  # in MiB
         }
 
         # Add user data (custom script) if provided
