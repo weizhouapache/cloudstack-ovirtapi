@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
@@ -96,19 +96,26 @@ async def delete_disk(disk_id: str, request: Request):
     Note: This would call CloudStack's deleteVolume API in a real implementation.
     """
     try:
-        # In a real implementation, this would call CloudStack's deleteVolume API
-        # For now, we'll just simulate the deletion
+        # Get volume information
         data = await cs_request(request, "listVolumes", {"id": disk_id})
         volumes = data["listvolumesresponse"].get("volume", [])
+    except Exception as e:
+        # If volume does not exist, assume it has been removed already
+        if e.response.status_code == 431:
+            return Response(status_code=200)
+        raise
         
-        if not volumes:
-            raise HTTPException(status_code=404, detail="Disk not found")
-        
-        # In a real implementation, we would call:
-        # await cs_request(request, "deleteVolume", {"id": disk_id})
-        
-        # Return success response
-        return create_response(request, "disk", {"id": disk_id})
+    try:
+        # Prepare parameters for CloudStack deleteVolume API
+        cs_params = {
+            "id": disk_id
+        }
+
+        # Call CloudStack API to delete the volume
+        data = await cs_request(request, "deleteVolume", cs_params)
+
+        return Response(status_code=200)
+
     except HTTPException:
         raise
     except Exception as e:
