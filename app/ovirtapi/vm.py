@@ -345,7 +345,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             ]
         },
         "name": vm.get("name", "veeam-worker"),
-        "description": vm.get("displayname", "Created by .\\Administrator at 12/29/2025 10:55 PM."),
+        "description": vm.get("displayname", vm.get("name")),
         "comment": "",
         "bios": {
             "boot_menu": {
@@ -810,6 +810,8 @@ async def create_vm(request: Request):
             "serviceofferingid": service_offering_id,
             "hypervisor": "KVM",
             "dummy": True,
+            "bootmode": "UEFI",
+            "boottype": "Secure",
             "details[0].guest.cpu.model": "host_passthrough",
             "details[0].cpuNumber": cpu_cores_total,          # total CPU cores
             "details[0].cpuSpeed": 1000,        # hardcoded

@@ -64,6 +64,8 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
                 raise ValueError("No session found for auth_hash")
             cookies = {"JSESSIONID": session["jsessionid"], "sessionkey": session["sessionkey"]}
 
+    logger.debug(f"CloudStack request params: {params}")
+
     async with httpx.AsyncClient(verify=False) as client:
         if command.lower() in ("login", "logout", "getuserkeys") or method.upper() == "POST":
             r = await client.post(API_URL, data=params, cookies=cookies)
