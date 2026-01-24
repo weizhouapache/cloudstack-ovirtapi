@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Request, HTTPException
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
+from app.utils.async_job import wait_for_job, get_job_id
+
+import json
 import uuid
 
 router = APIRouter()
@@ -62,38 +65,72 @@ async def list_vm_nics(vm_id: str, request: Request):
 async def create_vm_nic(vm_id: str, request: Request):
     """
     Creates a new network interface for a VM.
-    
-    Note: This would call CloudStack's addNicToVirtualMachine API in a real implementation.
+
+    Gets network ID from vnic_profile.id in the request and calls CloudStack's addNicToVirtualMachine API.
     """
     try:
+        # Get the request body to extract NIC parameters
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        nic_params = json.loads(body_str) if body_str else {}
+
         # Get VM details to confirm it exists
         vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
         vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
-        
+
         if not vms:
             raise HTTPException(status_code=404, detail="VM not found")
-        
-        # In a real implementation, this would call CloudStack's addNicToVirtualMachine API
-        # For now, we'll simulate adding a NIC
-        new_nic = {
-            "id": str(uuid.uuid4()),
-            "deviceid": len(vms[0].get("nic", [])),  # Next device ID
-            "macaddress": f"02:00:00:{uuid.uuid4().hex[:2]}:{uuid.uuid4().hex[2:4]}:{uuid.uuid4().hex[4:6]}",
-            "ipaddress": "192.168.1.100",  # Simulated IP
-            "netmask": "255.255.255.0",
-            "gateway": "192.168.1.1",
-            "networkid": "default-network-id",  # Simulated network ID
-            "networkname": "default-network"
+
+        # Extract network ID from vnic_profile in the request
+        vnic_profile = nic_params.get("vnic_profile", {})
+        network_id = vnic_profile.get("id")
+
+        if not network_id:
+            raise HTTPException(status_code=400, detail="Network ID (vnic_profile.id) is required")
+
+        # Prepare parameters for CloudStack addNicToVirtualMachine API
+        cs_params = {
+            "virtualmachineid": vm_id,
+            "networkid": network_id
         }
-        
-        payload = cs_nic_to_ovirt(new_nic, vm_id)
-        
+
+        # Call CloudStack API to add NIC to the VM
+        data = await cs_request(request, "addNicToVirtualMachine", cs_params)
+
+        # Check for job response (async)
+        job_id = get_job_id(data)
+
+        # Wait for async job to complete
+        job_result = await wait_for_job(request, job_id)
+
+        # Extract the created vm from the response
+        vm = job_result.get("virtualmachine", {})
+        if not vm:
+            raise HTTPException(status_code=500, detail="Failed to add NIC to VM - no VM returned from CloudStack")
+
+        # Get NIC information from virtual machine
+        new_nic_data = get_nic_by_networkid(vm, network_id)
+
+        # If we don't have NIC data at this point, there was an issue
+        if not new_nic_data:
+            raise HTTPException(status_code=500, detail="Failed to add NIC to VM - no NIC returned from CloudStack")
+
+        # Convert to oVirt format and return
+        payload = cs_nic_to_ovirt(new_nic_data, vm_id)
+
         return create_response(request, "nic", payload)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create VM NIC: {str(e)}")
 
+def get_nic_by_networkid(virtualmachine: dict, networkid: str):
+    for nic in virtualmachine.get("nic", []):
+        if nic.get("networkid") == networkid:
+            return nic
+    return None
 
 @router.get("/vms/{vm_id}/nics/{nic_id}")
 async def get_vm_nic(vm_id: str, nic_id: str, request: Request):
