@@ -2,10 +2,12 @@ from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
+from app.config import SERVER
 
 import json
 
 router = APIRouter()
+api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
 
 def cs_vm_to_ovirt(vm: dict) -> dict:
     """
@@ -550,18 +552,29 @@ async def start_vm(vm_id: str, request: Request):
         job_result = await wait_for_job(request, job_id)
         vm = job_result.get("virtualmachine", {})
     else:
-        # Direct response (unlikely but handle it)
-        if "errortext" in data:
-            raise HTTPException(status_code=400, detail=data.get("errortext"))
-        vm = data.get("startvirtualmachineresponse", {}).get("virtualmachine", {})
+        raise HTTPException(status_code=400, detail="Failed to start VM")
 
-    payload = cs_vm_to_ovirt(vm)
+    job = {
+        "id": job_id,
+        "href": f"{api_prefix}/jobs/{job_id}"
+    }
+
+    payload = {
+        "job": job,
+        "status": "complete",
+        "vm": cs_vm_to_ovirt(vm)
+    }
     return create_response(request, "vm", payload)
 
 @router.post("/vms/{vm_id}/stop")
 async def stop_vm(vm_id: str, request: Request):
     """Forcefully stop a running VM (does not gracefully shutdown)."""
     data = await cs_request(request, "stopVirtualMachine", {"id": vm_id, "forced": "true"})
+
+    # TODO: get force from POST data, to stop the VM even if a backup is running for it
+    # <action>
+    # <force>true</force>
+    # </action>
 
     # Check for job response (async)
     job_id = get_job_id(data)
@@ -570,12 +583,47 @@ async def stop_vm(vm_id: str, request: Request):
         job_result = await wait_for_job(request, job_id)
         vm = job_result.get("virtualmachine", {})
     else:
-        # Direct response (unlikely but handle it)
-        if "errortext" in data:
-            raise HTTPException(status_code=400, detail=data.get("errortext"))
-        vm = data.get("stopvirtualmachineresponse", {}).get("virtualmachine", {})
+        raise HTTPException(status_code=400, detail="Failed to stop VM")
 
-    payload = cs_vm_to_ovirt(vm)
+    job = {
+        "id": job_id,
+        "href": f"{api_prefix}/jobs/{job_id}"
+    }
+    payload = {
+        "job": job,
+        "status": "complete",
+        "vm": cs_vm_to_ovirt(vm)
+    }
+    return create_response(request, "vm", payload)
+
+@router.post("/vms/{vm_id}/shutdown")
+async def shutdown_vm(vm_id: str, request: Request):
+    """Gracefully shutdown a running VM."""
+    data = await cs_request(request, "stopVirtualMachine", {"id": vm_id, "forced": "false"})
+
+    # TODO: get force from POST data, to stop the VM even if a backup is running for it
+    # <action>
+    # <force>true</force>
+    # </action>
+
+    # Check for job response (async)
+    job_id = get_job_id(data)
+    if job_id:
+        # Wait for async job to complete
+        job_result = await wait_for_job(request, job_id)
+        vm = job_result.get("virtualmachine", {})
+    else:
+        raise HTTPException(status_code=400, detail="Failed to shutdown VM")
+
+    job = {
+        "id": job_id,
+        "href": f"{api_prefix}/jobs/{job_id}"
+    }
+    payload = {
+        "job": job,
+        "status": "complete",
+        "vm": cs_vm_to_ovirt(vm)
+    }
     return create_response(request, "vm", payload)
 
 @router.post("/vms")
@@ -758,27 +806,6 @@ async def delete_vm(vm_id: str, request: Request):
     job_result = await wait_for_job(request, job_id)
 
     return Response(status_code=200)
-
-
-@router.post("/vms/{vm_id}/shutdown")
-async def shutdown_vm(vm_id: str, request: Request):
-    """Gracefully shutdown a running VM."""
-    data = await cs_request(request, "stopVirtualMachine", {"id": vm_id, "forced": "false"})
-
-    # Check for job response (async)
-    job_id = get_job_id(data)
-    if job_id:
-        # Wait for async job to complete
-        job_result = await wait_for_job(request, job_id)
-        vm = job_result.get("virtualmachine", {})
-    else:
-        # Direct response (unlikely but handle it)
-        if "errortext" in data:
-            raise HTTPException(status_code=400, detail=data.get("errortext"))
-        vm = data.get("stopvirtualmachineresponse", {}).get("virtualmachine", {})
-
-    payload = cs_vm_to_ovirt(vm)
-    return create_response(request, "vm", payload)
 
 
 @router.get("/vms/{vm_id}/diskattachments")

@@ -98,3 +98,64 @@ def get_job_id(response: dict) -> str:
                 return value["jobid"]
 
     return ""
+
+
+# In-memory store for job information
+jobs = {}
+
+
+def create_job_record(job_id: str, description: str = "Job in progress"):
+    """
+    Create a job record in the in-memory store.
+    """
+    import time
+    current_time = int(time.time() * 1000)  # Milliseconds since epoch
+    start_time = int(time.time() * 1000 - 2000)
+
+    job_record = {
+        "id": job_id,
+        "description": description,
+        "status": "finished",
+        "auto_cleared": "true",
+        "external": "false",
+        "start_time": start_time,
+        "end_time": current_time,
+        "last_updated": current_time,
+        "owner": {
+            "href": "/ovirt-engine/api/users/c067a148-e4d5-11f0-98ce-00163e6c35f4",
+            "id": "c067a148-e4d5-11f0-98ce-00163e6c35f4"
+        },
+        "actions": {
+            "link": [
+                {
+                    "href": f"/ovirt-engine/api/jobs/{job_id}/clear",
+                    "rel": "clear"
+                },
+                {
+                    "href": f"/ovirt-engine/api/jobs/{job_id}/end",
+                    "rel": "end"
+                }
+            ]
+        },
+        "link": [
+            {
+                "href": f"/ovirt-engine/api/jobs/{job_id}/steps",
+                "rel": "steps"
+            }
+        ],
+        "href": f"/ovirt-engine/api/jobs/{job_id}"
+    }
+
+    jobs[job_id] = job_record
+    return job_record
+
+
+def get_job_record(job_id: str):
+    """
+    Get a job record from the in-memory store.
+    """
+    if job_id in jobs:
+        return jobs[job_id]
+    else:
+        # If job doesn't exist in memory, create a default one for demonstration
+        return create_job_record(job_id, f"Job {job_id}")
