@@ -802,7 +802,7 @@ async def create_vm(request: Request):
 
         # TODO: remove this
         cpu_cores_total = 2
-        memory_guaranteed = str(4096 * 1024 * 1024)
+        memory_guaranteed = str(2048 * 1024 * 1024)
 
         cs_params = {
             "name": vm_name,
@@ -812,7 +812,7 @@ async def create_vm(request: Request):
             "dummy": True,
             "bootmode": "UEFI",
             "boottype": "Secure",
-            "details[0].guest.cpu.model": "host_passthrough",
+            "details[0].guest.cpu.mode": "host-passthrough",
             "details[0].cpuNumber": cpu_cores_total,          # total CPU cores
             "details[0].cpuSpeed": 1000,        # hardcoded
             "details[0].memory": int(int(memory_guaranteed) / 1024 / 1024)  # in MiB
