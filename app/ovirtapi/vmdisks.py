@@ -64,7 +64,7 @@ async def attach_disk(vm_id: str, request: Request):
     """
     try:
         # Get VM details to confirm it exists
-        vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
+        vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id, "listall": True, "details": "min"})
         vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
         
         if not vms:
@@ -75,12 +75,18 @@ async def attach_disk(vm_id: str, request: Request):
         body_bytes = await request.body()
         body_str = body_bytes.decode("utf-8")
         diskattachment_params = json.loads(body_str) if body_str else {}
-        disk_id = diskattachment_params.get("disk_attachment").get("disk").get("id")
+        disk_id = diskattachment_params.get("disk").get("id")
 
         cs_params = {
             "id": disk_id,
             "virtualmachineid": vm_id,
         }
+
+        # Get all volumes and filter by VM ID
+        volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
+        volumes = volumes_data["listvolumesresponse"].get("volume", [])
+        if not volumes or len(volumes) == 0:
+            cs_params["deviceid"] = 0
 
         # Call CloudStack API to create the VM
         data = await cs_request(request, "attachVolume", cs_params)
