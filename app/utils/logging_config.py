@@ -3,7 +3,7 @@ import logging.handlers
 import os
 from app.config import config
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 
 def setup_logging():
     """Configure logging with level and file from config.ini"""

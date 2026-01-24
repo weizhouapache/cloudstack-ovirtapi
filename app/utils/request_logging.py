@@ -3,10 +3,9 @@ import time
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from app.utils.logging_config import logger
+
 import json
-
-logger = logging.getLogger(__name__)
-
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -28,6 +27,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         log_msg += f" - IP: {client_ip}"
         if request.headers.get("user-agent"):
             log_msg += f" - UA: {request.headers.get('user-agent')[:50]}"
+
+        logger.info(log_msg)
 
         # Troubleshooting: Log all request headers
         logger.debug(f"Request headers: {dict(request.headers)}")
@@ -57,8 +58,6 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 logger.debug(f"Query parameters: {query_string}")
             else:
                 logger.debug("Query parameters: (none)")
-
-        logger.info(log_msg)
 
         # Measure response time
         start_time = time.time()
