@@ -509,6 +509,15 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
             "id": "58ca604e-01a7-003f-01de-000000000250"
         }
     }
+
+    # Add host information if host_id is present in the VM data
+    host_id = vm.get("hostid")
+    if host_id:
+        detailed_vm["host"] = {
+            "href": f"/ovirt-engine/api/hosts/{host_id}",
+            "id": host_id
+        }
+
     return detailed_vm
 
 @router.get("/vms")
