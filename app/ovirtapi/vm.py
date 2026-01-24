@@ -867,6 +867,21 @@ async def create_vm(request: Request):
         # Convert to oVirt format and return
         payload = await cs_vm_to_ovirt(vm, request)
 
+        # Update Guest OS to "Rocky Linux 9"
+        if vm.get("osdisplayname") != "Rocky Linux 9":
+            guestos_data = await cs_request(request, "listOsTypes", {
+                "description" : "Rocky Linux 9"
+            })
+            guestos = guestos_data["listostypesresponse"].get("ostype", [])
+            if guestos_data:
+                new_guest_os_id = guestos[0].get("id")
+                # Prepare parameters for CloudStack updateVirtualMachine API
+                update_params = {"id": vm.get("id"), "ostypeid": new_guest_os_id}
+                # Call CloudStack API to update the VM
+                update_data = await cs_request(request, "updateVirtualMachine", update_params)
+                updated_vm = update_data["updatevirtualmachineresponse"].get("virtualmachine", [])
+                payload = await cs_vm_to_ovirt(updated_vm, request)
+
         return create_response(request, "vm", payload)
 
     except json.JSONDecodeError:
