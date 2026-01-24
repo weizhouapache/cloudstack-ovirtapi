@@ -551,19 +551,68 @@ async def get_vm(vm_id: str, request: Request):
 
 @router.put("/vms/{vm_id}")
 async def update_vm(vm_id: str, request: Request):
-    data = await cs_request(request,
-        "listVirtualMachines",
-        {"id": vm_id}
-    )
-    vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
+    """
+    Updates a VM with the provided parameters.
 
-    if not vms:
-        raise HTTPException(status_code=404, detail="VM not found")
+    Gets the request body to extract VM update parameters and calls CloudStack's updateVirtualMachine API.
+    """
+    try:
+        # Get the request body to extract VM update parameters
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        vm_update_params = json.loads(body_str) if body_str else {}
 
-    vm = vms[0]
-    payload = cs_vm_to_ovirt(vm)
+        # Get current VM data to confirm it exists
+        data = await cs_request(request,
+            "listVirtualMachines",
+            {"id": vm_id}
+        )
+        vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
 
-    return create_response(request, "vm", payload)
+        if not vms:
+            raise HTTPException(status_code=404, detail="VM not found")
+
+        # Prepare parameters for CloudStack updateVirtualMachine API
+        cs_params = {"id": vm_id}
+
+        # Extract update parameters from the request
+        if "name" in vm_update_params:
+            cs_params["name"] = vm_update_params["name"]
+        if "displayname" in vm_update_params:
+            cs_params["displayname"] = vm_update_params["displayname"]
+        if "group" in vm_update_params:
+            cs_params["group"] = vm_update_params["group"]
+        if "haenable" in vm_update_params:
+            cs_params["haenable"] = vm_update_params["haenable"]
+        if "hakeyword" in vm_update_params:
+            cs_params["hakeyword"] = vm_update_params["hakeyword"]
+        if "ostypeid" in vm_update_params:
+            cs_params["ostypeid"] = vm_update_params["ostypeid"]
+        if "securitygroupenabled" in vm_update_params:
+            cs_params["securitygroupenabled"] = vm_update_params["securitygroupenabled"]
+        if "userdata" in vm_update_params:
+            # For userdata, we need to encode it in base64 as required by CloudStack
+            import base64
+            encoded_userdata = base64.b64encode(vm_update_params["userdata"].encode()).decode()
+            cs_params["userdata"] = encoded_userdata
+
+        # Call CloudStack API to update the VM
+        update_data = await cs_request(request, "updateVirtualMachine", cs_params)
+
+        vm = update_data["updatevirtualmachineresponse"].get("virtualmachine", [])
+
+        # If we don't have VM data at this point, there was an issue
+        if not vm:
+            raise HTTPException(status_code=500, detail="Failed to update VM - no VM returned from CloudStack")
+
+        # Convert to oVirt format and return
+        payload = cs_vm_to_ovirt(vm)
+
+        return create_response(request, "vm", payload)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update VM: {str(e)}")
 
 @router.post("/vms/{vm_id}/start")
 async def start_vm(vm_id: str, request: Request):
