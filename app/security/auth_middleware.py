@@ -5,10 +5,10 @@ from app.security.hashing import hash_auth
 from app.state.sessions import get_session, store_session
 from app.cloudstack.client import cs_request
 from app.config import SERVER
-import base64
-import logging
+from app.utils.logging_config import logger
 
-logger = logging.getLogger(__name__)
+import base64
+
 api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
 
 class oVirtAPIAuthMiddleware(BaseHTTPMiddleware):

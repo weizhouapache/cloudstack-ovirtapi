@@ -3,6 +3,8 @@ import logging.handlers
 import os
 from app.config import config
 
+logger = logging.getLogger(__name__)
+
 def setup_logging():
     """Configure logging with level and file from config.ini"""
     try:
@@ -21,7 +23,6 @@ def setup_logging():
         os.makedirs(log_dir, exist_ok=True)
 
     # Configure root logger
-    logger = logging.getLogger()
     logger.setLevel(level)
 
     # Remove existing handlers

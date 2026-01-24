@@ -3,9 +3,7 @@ from fastapi import Request
 from app.config import CLOUDSTACK
 from app.cloudstack.signature import generate_signature
 from app.state.sessions import get_session
-import logging
-
-logger = logging.getLogger(__name__)
+from app.utils.logging_config import logger
 
 API_URL=CLOUDSTACK["endpoint"]
 

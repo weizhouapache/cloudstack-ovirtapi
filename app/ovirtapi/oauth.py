@@ -5,10 +5,9 @@ from fastapi import APIRouter, HTTPException, Response, Form
 from app.cloudstack.client import cs_request
 from app.state.sessions import get_session, store_session
 from app.security.hashing import hash_auth
-import logging
-import json
+from app.utils.logging_config import logger
 
-logger = logging.getLogger(__name__)
+import json
 
 router = APIRouter()
 
