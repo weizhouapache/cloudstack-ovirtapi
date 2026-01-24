@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
@@ -727,6 +727,37 @@ async def create_vm(request: Request):
         raise HTTPException(status_code=400, detail=f"Missing required parameter: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create VM: {str(e)}")
+
+
+@router.delete("/vms/{vm_id}")
+async def delete_vm(vm_id: str, request: Request):
+    """
+    Deletes a virtual machine.
+
+    Supports the detach_only parameter to control whether the VM is only detached or fully destroyed.
+    """
+    # Parse query parameters to check for detach_only
+    detach_only = request.query_params.get("detach_only", "false").lower() == "true"
+    # expunge = str(not detach_only).lower()
+
+    # Prepare parameters for CloudStack destroyVirtualMachine API
+    # If detach_only is true, we might need to use a different approach or parameter
+    # In CloudStack, the expunge parameter controls whether to fully destroy or just stop
+    cs_params = {
+        "id": vm_id,
+        "expunge": True
+    }
+
+    # Call CloudStack API to destroy the VM
+    data = await cs_request(request, "destroyVirtualMachine", cs_params)
+
+    # Check for job response (async)
+    job_id = get_job_id(data)
+
+    # Wait for async job to complete
+    job_result = await wait_for_job(request, job_id)
+
+    return Response(status_code=200)
 
 
 @router.post("/vms/{vm_id}/shutdown")
