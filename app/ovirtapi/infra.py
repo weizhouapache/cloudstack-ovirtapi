@@ -96,9 +96,9 @@ def cs_storage_pool_to_ovirt(pool: dict) -> dict:
     Convert a CloudStack StoragePool dict to an oVirt-compatible StorageDomain payload.
     """
     # Extract storage details from CloudStack pool
-    pool_id = pool.get("id", "41609681-c92a-410a-bcc2-5b5e1305cdd1")
-    pool_name = pool.get("name", "hosted_storage")
-    pool_zone_id = pool.get("zoneid", "91f4d826-e4d5-11f0-bd93-00163e6c35f4")
+    pool_id = pool.get("id")
+    pool_name = pool.get("name")
+    pool_zone_id = pool.get("zoneid")
 
     # Calculate related values based on the example
     available = int(pool.get("capacitybytes", 1128502657024))

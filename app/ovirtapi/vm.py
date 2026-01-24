@@ -9,12 +9,12 @@ import json
 router = APIRouter()
 api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
 
-def cs_vm_to_ovirt(vm: dict) -> dict:
+async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
     """
     Convert a CloudStack VM dict to an oVirt-compatible VM payload with full details.
     """
 
-    vm_id = vm.get("id", "NULL")
+    vm_id = vm.get("id")
 
     # Use match/case to determine VM status
     vm_state = vm.get("state", "down").lower()
@@ -38,196 +38,219 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
         case _:
             vm_status = vm_state
 
+    # Get volumes attached to this VM to extract storage information
+    try:
+        volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
+        volumes = volumes_data["listvolumesresponse"].get("volume", [])
+    except:
+        # If we can't get volumes, use empty list
+        volumes = []
+
+    # Create disk attachments with dynamic storage domain IDs
+    disk_attachments = []
+    for i, volume in enumerate(volumes):
+        # Get storage domain ID from the volume
+        storage_id = volume.get("storageid", f"dynamic-storage-{i}")
+
+        disk_attachment = {
+            "active": "true",
+            "bootable": str(volume.get("isbootable", True)).lower(),
+            "interface": "virtio_scsi",
+            "logical_name": f"/dev/sd{chr(ord('a') + i)}",
+            "pass_discard": "false",
+            "read_only": "false",
+            "uses_scsi_reservation": "false",
+            "disk": {
+                "actual_size": str(volume.get("size", "1239158784")),
+                "alias": volume.get("name", f"Veeam_KvmBackupDisk_{vm.get('name', 'test-vm')}"),
+                "backup": "none",
+                "content_type": "data",
+                "format": "cow",
+                "image_id": volume.get("id"),
+                "propagate_errors": "false",
+                "provisioned_size": str(volume.get("size", "107374182400")),
+                "qcow_version": "qcow2_v3",
+                "shareable": "false",
+                "sparse": str(volume.get("issparse", True)).lower(),
+                "status": "ok",
+                "storage_type": "image",
+                "total_size": str(volume.get("size", "1239158784")),
+                "wipe_after_delete": "false",
+                "disk_profile": {
+                    "href": f"/ovirt-engine/api/diskprofiles/{storage_id}",
+                    "id": storage_id
+                },
+                "quota": {
+                    "href": f"/ovirt-engine/api/datacenters/{vm.get('zoneid')}/quotas/{vm.get('zoneid')}",
+                    "id": f"{vm.get('zoneid')}"
+                },
+                "storage_domains": {
+                    "storage_domain": [
+                        {
+                            "href": f"/ovirt-engine/api/storagedomains/{storage_id}",
+                            "id": storage_id
+                        }
+                    ]
+                },
+                "actions": {
+                    "link": [
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/reduce",
+                            "rel": "reduce"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/copy",
+                            "rel": "copy"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/export",
+                            "rel": "export"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/move",
+                            "rel": "move"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/refreshlun",
+                            "rel": "refreshlun"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/convert",
+                            "rel": "convert"
+                        },
+                        {
+                            "href": f"/ovirt-engine/api/disks/{volume.get('id')}/sparsify",
+                            "rel": "sparsify"
+                        }
+                    ]
+                },
+                "name": volume.get("name", f"Veeam_KvmBackupDisk_{vm.get('name', 'test-vm')}"),
+                "description": volume.get("displaytext", ""),
+                "link": [
+                    {
+                        "href": f"/ovirt-engine/api/disks/{volume.get('id')}/permissions",
+                        "rel": "permissions"
+                    },
+                    {
+                        "href": f"/ovirt-engine/api/disks/{volume.get('id')}/disksnapshots",
+                        "rel": "disksnapshots"
+                    },
+                    {
+                        "href": f"/ovirt-engine/api/disks/{volume.get('id')}/statistics",
+                        "rel": "statistics"
+                    }
+                ],
+                "href": f"/ovirt-engine/api/disks/{volume.get('id')}",
+                "id": volume.get("id", f"dynamic-disk-{i}")
+            },
+            "vm": {
+                "href": f"/ovirt-engine/api/vms/{vm_id}",
+                "id": vm_id
+            },
+            "link": [],
+            "href": f"/ovirt-engine/api/vms/{vm_id}/diskattachments/{volume.get('id')}",
+            "id": volume.get("id", f"dynamic-disk-{i}")
+        }
+        disk_attachments.append(disk_attachment)
+
+    # Generate NICs dynamically based on VM data
+    vm_nics = vm.get("nic", [])
+    nics = []
+    for i, nic in enumerate(vm_nics):
+        nic_id = nic.get("id", f"nic-{i}")
+        mac_address = nic.get("macaddress")
+
+        nic_obj = {
+            "interface": "virtio",  # Default interface type in CloudStack
+            "linked": "true",
+            "mac": {
+                "address": mac_address
+            },
+            "plugged": "true",
+            "synced": "true",
+            "reported_devices": {
+                "reported_device": [
+                    {
+                        "ips": {
+                            "ip": [
+                                {
+                                    "address": nic.get("ipaddress", ""),
+                                    "version": "v4"
+                                }
+                            ]
+                        },
+                        "mac": {
+                            "address": mac_address
+                        },
+                        "type": "network",
+                        "vm": {
+                            "href": f"/ovirt-engine/api/vms/{vm_id}",
+                            "id": vm_id
+                        },
+                        "name": f"eth{nic.get('deviceid', i)}",
+                        "description": "guest reported data",
+                        "href": f"/ovirt-engine/api/vms/{vm_id}/reporteddevices/{nic_id}",
+                        "id": nic_id
+                    }
+                ]
+            },
+            "vnic_profile": {
+                "href": f"/ovirt-engine/api/vnicprofiles/{nic.get('networkid', f'dynamic-vnic-{i}')}",
+                "id": nic.get('networkid', f"dynamic-vnic-{i}")
+            },
+            "actions": {
+                "link": [
+                    {
+                        "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}/activate",
+                        "rel": "activate"
+                    },
+                    {
+                        "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}/deactivate",
+                        "rel": "deactivate"
+                    }
+                ]
+            },
+            "name": f"nic{i+1}",
+            "vm": {
+                "href": f"/ovirt-engine/api/vms/{vm_id}",
+                "id": vm_id
+            },
+            "link": [
+                {
+                    "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}/reporteddevices",
+                    "rel": "reporteddevices"
+                },
+                {
+                    "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}/networkfilterparameters",
+                    "rel": "networkfilterparameters"
+                },
+                {
+                    "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}/statistics",
+                    "rel": "statistics"
+                }
+            ],
+            "href": f"/ovirt-engine/api/vms/{vm_id}/nics/{nic_id}",
+            "id": nic_id
+        }
+        nics.append(nic_obj)
+
     # Create the detailed VM structure as specified
     detailed_vm = {
         "status": vm_status,
         "disk_attachments": {
-            "disk_attachment": [
-                {
-                    "active": "true",
-                    "bootable": "true",
-                    "interface": "virtio_scsi",
-                    "logical_name": "/dev/sda",
-                    "pass_discard": "false",
-                    "read_only": "false",
-                    "uses_scsi_reservation": "false",
-                    "disk": {
-                        "actual_size": "1239158784",
-                        "alias": "Veeam_KvmBackupDisk_" + vm.get("name", "test-vm"),
-                        "backup": "none",
-                        "content_type": "data",
-                        "format": "cow",
-                        "image_id": "fa25e57f-f666-4e05-aa5d-c9ab66a0e232",
-                        "propagate_errors": "false",
-                        "provisioned_size": "107374182400",
-                        "qcow_version": "qcow2_v3",
-                        "shareable": "false",
-                        "sparse": "true",
-                        "status": "ok",
-                        "storage_type": "image",
-                        "total_size": "1239158784",
-                        "wipe_after_delete": "false",
-                        "disk_profile": {
-                            "href": "/ovirt-engine/api/diskprofiles/97588d4a-0219-4ff0-8792-375b61976c1e",
-                            "id": "97588d4a-0219-4ff0-8792-375b61976c1e"
-                        },
-                        "quota": {
-                            "href": "/ovirt-engine/api/datacenters/91f4d826-e4d5-11f0-bd93-00163e6c35f4/quotas/95e46398-e4d5-11f0-bb71-00163e6c35f4",
-                            "id": "95e46398-e4d5-11f0-bb71-00163e6c35f4"
-                        },
-                        "storage_domains": {
-                            "storage_domain": [
-                                {
-                                    "href": "/ovirt-engine/api/storagedomains/41609681-c92a-410a-bcc2-5b5e1305cdd1",
-                                    "id": "41609681-c92a-410a-bcc2-5b5e1305cdd1"
-                                }
-                            ]
-                        },
-                        "actions": {
-                            "link": [
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/reduce",
-                                    "rel": "reduce"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/copy",
-                                    "rel": "copy"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/export",
-                                    "rel": "export"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/move",
-                                    "rel": "move"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/refreshlun",
-                                    "rel": "refreshlun"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/convert",
-                                    "rel": "convert"
-                                },
-                                {
-                                    "href": f"/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/sparsify",
-                                    "rel": "sparsify"
-                                }
-                            ]
-                        },
-                        "name": "Veeam_KvmBackupDisk_" + vm.get("name", "test-vm"),
-                        "description": "",
-                        "link": [
-                            {
-                                "href": "/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/permissions",
-                                "rel": "permissions"
-                            },
-                            {
-                                "href": "/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/disksnapshots",
-                                "rel": "disksnapshots"
-                            },
-                            {
-                                "href": "/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a/statistics",
-                                "rel": "statistics"
-                            }
-                        ],
-                        "href": "/ovirt-engine/api/disks/b4ace9df-f1fb-4595-8e87-b4c43f13035a",
-                        "id": "b4ace9df-f1fb-4595-8e87-b4c43f13035a"
-                    },
-                    "vm": {
-                        "href": f"/ovirt-engine/api/vms/{vm_id}",
-                        "id": vm_id
-                    },
-                    "link": [],
-                    "href": f"/ovirt-engine/api/vms/{vm_id}/diskattachments/b4ace9df-f1fb-4595-8e87-b4c43f13035a",
-                    "id": "b4ace9df-f1fb-4595-8e87-b4c43f13035a"
-                }
-            ]
+            "disk_attachment": disk_attachments
         },
         "nics": {
-            "nic": [
-                {
-                    "interface": "virtio",
-                    "linked": "true",
-                    "mac": {
-                        "address": "56:6f:9f:c0:00:06"
-                    },
-                    "plugged": "true",
-                    "synced": "true",
-                    "reported_devices": {
-                        "reported_device": [
-                            {
-                                "ips": {
-                                    "ip": [
-                                        {
-                                            "address": "10.0.113.115",
-                                            "version": "v4"
-                                        }
-                                    ]
-                                },
-                                "mac": {
-                                    "address": "56:6f:9f:c0:00:06"
-                                },
-                                "type": "network",
-                                "vm": {
-                                    "href": f"/ovirt-engine/api/vms/{vm_id}",
-                                    "id": vm_id
-                                },
-                                "name": "eth0",
-                                "description": "guest reported data",
-                                "href": f"/ovirt-engine/api/vms/{vm_id}/reporteddevices/65746830-3536-3a36-663a-39663a63303a",
-                                "id": "65746830-3536-3a36-663a-39663a63303a"
-                            }
-                        ]
-                    },
-                    "vnic_profile": {
-                        "href": "/ovirt-engine/api/vnicprofiles/0000000a-000a-000a-000a-000000000398",
-                        "id": "0000000a-000a-000a-000a-000000000398"
-                    },
-                    "actions": {
-                        "link": [
-                            {
-                                "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1/activate",
-                                "rel": "activate"
-                            },
-                            {
-                                "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1/deactivate",
-                                "rel": "deactivate"
-                            }
-                        ]
-                    },
-                    "name": "nic1",
-                    "vm": {
-                        "href": f"/ovirt-engine/api/vms/{vm_id}",
-                        "id": vm_id
-                    },
-                    "link": [
-                        {
-                            "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1/reporteddevices",
-                            "rel": "reporteddevices"
-                        },
-                        {
-                            "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1/networkfilterparameters",
-                            "rel": "networkfilterparameters"
-                        },
-                        {
-                            "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1/statistics",
-                            "rel": "statistics"
-                        }
-                    ],
-                    "href": f"/ovirt-engine/api/vms/{vm_id}/nics/6215ed25-a865-41b7-972e-9b9a0401bdc1",
-                    "id": "6215ed25-a865-41b7-972e-9b9a0401bdc1"
-                }
-            ]
+            "nic": nics
         },
         "original_template": {
-            "href": "/ovirt-engine/api/templates/00000000-0000-0000-0000-000000000000",
-            "id": "00000000-0000-0000-0000-000000000000"
+            "href": f"/ovirt-engine/api/templates/{vm.get('templateid', 'dynamic-template')}",
+            "id": vm.get('templateid', 'dynamic-template')
         },
         "tags": {},
         "template": {
-            "href": "/ovirt-engine/api/templates/00000000-0000-0000-0000-000000000000",
-            "id": "00000000-0000-0000-0000-000000000000"
+            "href": f"/ovirt-engine/api/templates/{vm.get('templateid', 'dynamic-template')}",
+            "id": vm.get('templateid', 'dynamic-template')
         },
         "actions": {
             "link": [
@@ -385,11 +408,11 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
             "enabled": "false"
         },
         "cluster": {
-            "href": "/ovirt-engine/api/clusters/91f79836-e4d5-11f0-884a-00163e6c35f4",
-            "id": "91f79836-e4d5-11f0-884a-00163e6c35f4"
+            "href": f"/ovirt-engine/api/clusters/{vm.get('clusterid', vm.get('zoneid', 'dynamic-cluster'))}",
+            "id": vm.get('clusterid', vm.get('zoneid', 'dynamic-cluster'))
         },
         "quota": {
-            "id": "95e46398-e4d5-11f0-bb71-00163e6c35f4"
+            "id": vm.get('zoneid')
         },
         "link": [
             {
@@ -481,8 +504,8 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
             "priority": "0"
         },
         "large_icon": {
-            "href": "/ovirt-engine/api/icons/4d71f9a0-24aa-4dea-aa40-da300e0f2e99",
-            "id": "4d71f9a0-24aa-4dea-aa40-da300e0f2e99"
+            "href": f"/ovirt-engine/api/icons/{vm.get('iconid', 'dynamic-large-icon')}",
+            "id": vm.get('iconid', 'dynamic-large-icon')
         },
         "memory_policy": {
             "ballooning": "true",
@@ -495,8 +518,8 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
             "affinity": "migratable"
         },
         "small_icon": {
-            "href": "/ovirt-engine/api/icons/60d8af9d-1d9d-4f85-8fe5-e3385145d7d8",
-            "id": "60d8af9d-1d9d-4f85-8fe5-e3385145d7d8"
+            "href": f"/ovirt-engine/api/icons/{vm.get('smalliconid', 'dynamic-small-icon')}",
+            "id": vm.get('smalliconid', 'dynamic-small-icon')
         },
         "start_paused": "false",
         "storage_error_resume_behaviour": "auto_resume",
@@ -505,8 +528,8 @@ def cs_vm_to_ovirt(vm: dict) -> dict:
         },
         "virtio_scsi_multi_queues_enabled": "false",
         "cpu_profile": {
-            "href": "/ovirt-engine/api/cpuprofiles/58ca604e-01a7-003f-01de-000000000250",
-            "id": "58ca604e-01a7-003f-01de-000000000250"
+            "href": f"/ovirt-engine/api/cpuprofiles/{vm.get('cpuprofileid', 'dynamic-cpu-profile')}",
+            "id": vm.get('cpuprofileid', 'dynamic-cpu-profile')
         }
     }
 
@@ -528,7 +551,7 @@ async def list_vms(request: Request):
     )
     vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
 
-    payload = [cs_vm_to_ovirt(vm) for vm in vms]
+    payload = [await cs_vm_to_ovirt(vm, request) for vm in vms]
 
     return create_response(request, "vms", payload)
 
@@ -545,7 +568,7 @@ async def get_vm(vm_id: str, request: Request):
         raise HTTPException(status_code=404, detail="VM not found")
 
     vm = vms[0]
-    payload = cs_vm_to_ovirt(vm)
+    payload = await cs_vm_to_ovirt(vm, request)
 
     return create_response(request, "vm", payload)
 
@@ -606,7 +629,7 @@ async def update_vm(vm_id: str, request: Request):
             raise HTTPException(status_code=500, detail="Failed to update VM - no VM returned from CloudStack")
 
         # Convert to oVirt format and return
-        payload = cs_vm_to_ovirt(vm)
+        payload = await cs_vm_to_ovirt(vm, request)
 
         return create_response(request, "vm", payload)
     except json.JSONDecodeError:
@@ -636,7 +659,7 @@ async def start_vm(vm_id: str, request: Request):
     payload = {
         "job": job,
         "status": "complete",
-        "vm": cs_vm_to_ovirt(vm)
+        "vm": await cs_vm_to_ovirt(vm, request)
     }
     return create_response(request, "vm", payload)
 
@@ -666,7 +689,7 @@ async def stop_vm(vm_id: str, request: Request):
     payload = {
         "job": job,
         "status": "complete",
-        "vm": cs_vm_to_ovirt(vm)
+        "vm": await cs_vm_to_ovirt(vm, request)
     }
     return create_response(request, "vm", payload)
 
@@ -696,7 +719,7 @@ async def shutdown_vm(vm_id: str, request: Request):
     payload = {
         "job": job,
         "status": "complete",
-        "vm": cs_vm_to_ovirt(vm)
+        "vm": await cs_vm_to_ovirt(vm, request)
     }
     return create_response(request, "vm", payload)
 
@@ -840,7 +863,7 @@ async def create_vm(request: Request):
             raise HTTPException(status_code=500, detail="Failed to create VM - no VM returned from CloudStack")
 
         # Convert to oVirt format and return
-        payload = cs_vm_to_ovirt(vm)
+        payload = await cs_vm_to_ovirt(vm, request)
 
         return create_response(request, "vm", payload)
 
