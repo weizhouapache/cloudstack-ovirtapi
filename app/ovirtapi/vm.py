@@ -540,6 +540,22 @@ async def get_vm(vm_id: str, request: Request):
 
     return create_response(request, "vm", payload)
 
+@router.put("/vms/{vm_id}")
+async def update_vm(vm_id: str, request: Request):
+    data = await cs_request(request,
+        "listVirtualMachines",
+        {"id": vm_id}
+    )
+    vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
+
+    if not vms:
+        raise HTTPException(status_code=404, detail="VM not found")
+
+    vm = vms[0]
+    payload = cs_vm_to_ovirt(vm)
+
+    return create_response(request, "vm", payload)
+
 @router.post("/vms/{vm_id}/start")
 async def start_vm(vm_id: str, request: Request):
     """Start a stopped VM."""
@@ -713,6 +729,7 @@ async def create_vm(request: Request):
             "serviceofferingid": service_offering_id,
             "hypervisor": "KVM",
             "dummy": True,
+            "details[0].guest.cpu.model": "host_passthrough",
             "details[0].cpuNumber": cpu_cores_total,          # total CPU cores
             "details[0].cpuSpeed": 1000,        # hardcoded
             "details[0].memory": int(int(memory_guaranteed) / 1024 / 1024)  # in MiB
