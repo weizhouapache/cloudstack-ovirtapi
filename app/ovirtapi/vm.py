@@ -661,7 +661,7 @@ async def start_vm(vm_id: str, request: Request):
         "status": "complete",
         "vm": await cs_vm_to_ovirt(vm, request)
     }
-    return create_response(request, "vm", payload)
+    return create_response(request, "job", payload)
 
 @router.post("/vms/{vm_id}/stop")
 async def stop_vm(vm_id: str, request: Request):
@@ -691,7 +691,7 @@ async def stop_vm(vm_id: str, request: Request):
         "status": "complete",
         "vm": await cs_vm_to_ovirt(vm, request)
     }
-    return create_response(request, "vm", payload)
+    return create_response(request, "job", payload)
 
 @router.post("/vms/{vm_id}/shutdown")
 async def shutdown_vm(vm_id: str, request: Request):
@@ -721,7 +721,7 @@ async def shutdown_vm(vm_id: str, request: Request):
         "status": "complete",
         "vm": await cs_vm_to_ovirt(vm, request)
     }
-    return create_response(request, "vm", payload)
+    return create_response(request, "job", payload)
 
 @router.post("/vms")
 async def create_vm(request: Request):
