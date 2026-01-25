@@ -64,9 +64,103 @@ def cs_host_to_ovirt(host: dict) -> dict:
     return {
         "id": host["id"],
         "name": host["name"],
+        "address": host.get("ipaddress", host["name"]),  # Using host name as address if not found
         "type": "rhel",
-        "cluster": {"id": host["clusterid"]},
+        "cluster": {
+            "id": host["clusterid"],
+            "href": f"/ovirt-engine/api/clusters/{host['clusterid']}"
+        },
         "status": "up" if state == "up" else "down",
+        "hardware_information": {
+            "family": "",
+            "manufacturer": host.get("hypervisor", "Unknown"),  # Using hypervisor as manufacturer
+            "product_name": host.get("hypervisor", "Virtual Platform"),
+            "serial_number": "",  # Not available in CloudStack host data
+            "uuid": host.get("id", ""),  # Using host ID as UUID
+            "version": ""
+        },
+        "cpu": {
+            "name": host.get("cpuname", "Unknown CPU"),
+            "speed": 2000,
+            "topology": {
+                "cores": 4,
+                "sockets": 1,  # Default value since CloudStack doesn't provide this directly
+                "threads": 4   # Default value since CloudStack doesn't provide this directly
+            },
+            "type": host.get("cpuname", "Unknown CPU Type")
+        },
+        "memory": str(host.get("memorytotal", 0)),  # Memory in bytes
+        "os": {
+            "type": "RHEL",  # Default OS type for all hosts
+            "version": {
+                "full_version": "",
+                "major": 4,
+                "minor": 22
+            },
+            "description": host.get("version", "")
+        },
+        "power_management": {
+            "enabled": "false"  # Default to false as CloudStack doesn't provide this info
+        },
+        "href": f"/ovirt-engine/api/hosts/{host['id']}",
+        "actions": {
+            "link": [
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/refresh",
+                    "rel": "refresh"
+                },
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/install",
+                    "rel": "install"
+                },
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/activate",
+                    "rel": "activate"
+                },
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/deactivate",
+                    "rel": "deactivate"
+                },
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/setupnetworks",
+                    "rel": "setupnetworks"
+                },
+                {
+                    "href": f"/ovirt-engine/api/hosts/{host['id']}/upgrade",
+                    "rel": "upgrade"
+                }
+            ]
+        },
+        "link": [
+            {
+                "href": f"/ovirt-engine/api/hosts/{host['id']}/nics",
+                "rel": "nics"
+            },
+            {
+                "href": f"/ovirt-engine/api/hosts/{host['id']}/storage",
+                "rel": "storage"
+            },
+            {
+                "href": f"/ovirt-engine/api/hosts/{host['id']}/permissions",
+                "rel": "permissions"
+            }
+        ],
+        "comment": "",
+        # Add other fields with default or empty values as needed
+        "auto_numa_status": "unknown",
+        "external_status": "ok",
+        "kdump_status": "disabled",
+        "max_scheduling_memory": host.get("memorytotal", 0),
+        "spm": {
+            "status": "none"
+        },
+        "version": {
+            "full_version": "vdsm-4.50.0-0.el9",
+            "major": 4,
+            "minor": 50,
+            "build": 0,
+            "revision": 0
+        }
     }
 
 @router.get("/hosts")
