@@ -810,8 +810,8 @@ async def create_vm(request: Request):
             "serviceofferingid": service_offering_id,
             "hypervisor": "KVM",
             "dummy": True,
-            "bootmode": "UEFI",
-            "boottype": "Secure",
+            "boottype": "UEFI",
+            "bootmode": "Secure",
             "details[0].guest.cpu.mode": "host-passthrough",
             "details[0].cpuNumber": cpu_cores_total,          # total CPU cores
             "details[0].cpuSpeed": 1000,        # hardcoded
