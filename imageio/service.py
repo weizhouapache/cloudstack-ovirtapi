@@ -339,16 +339,15 @@ async def upload_transfer(transfer_id: str, request: Request):
 async def options_imageio(transfer_id: str, request: Request):
     """
     OPTIONS method for individual imagetransfer endpoint.
-    Used for CORS preflight requests.
+    Returns capabilities information for ovirt-imageio-client compatibility.
     """
-    return Response(
-        status_code=200,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, Range, Content-Range, Accept, Destination, Overwrite",
-        }
-    )
+    capabilities = {
+        "unix_socket": "\u0000/org/ovirt/imageio",
+        "features": ["extents", "zero", "flush"],
+        "max_readers": 8,
+        "max_writers": 8
+    }
+    return JSONResponse(content=capabilities, status_code=200)
 
 # =========================
 # Run ImageIO Service
