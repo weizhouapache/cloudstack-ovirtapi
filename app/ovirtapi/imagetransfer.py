@@ -6,8 +6,11 @@ import time
 import json
 import httpx
 
-from app.config import SERVER
+from app.config import SERVER, IMAGEIO
 from app.security.certs import get_default_ip
+from app.config import config
+
+INTERNAL_TOKEN = IMAGEIO.get( "internal_token", fallback="")
 
 router = APIRouter()
 
@@ -42,18 +45,19 @@ async def create_image_transfer(request: Request):
     imagetransfer_params = json.loads(body_str) if body_str else {}
     volume_id = imagetransfer_params.get("disk", {}).get("id")
     direction = imagetransfer_params.get("direction", "upload")
+    vm_id = imagetransfer_params.get("vm", {}).get("id")
 
     # Get volume information from CloudStack
     if not volume_id:
         raise HTTPException(status_code=400, detail="Volume ID is required")
-        
+
     try:
         volume_data = await cs_request(request, "listVolumes", {"id": volume_id})
         volumes = volume_data["listvolumesresponse"].get("volume", [])
         if volumes:
             volume_info = volumes[0]
             # Extract relevant information from CloudStack volume
-            volume_path = f"/mnt/{volume_info.get('storage')}/{volume_info.get('path')}"
+            volume_path = f"/mnt/{volume_info.get('storageid')}/{volume_info.get('path')}"
             volume_format = "qcow2"  # Default format, could be determined from volume
             volume_size = volume_info.get("size")
         else:
@@ -61,6 +65,34 @@ async def create_image_transfer(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail="Cannot get volume information")
 
+    # Get VM information if provided
+    target_host = None
+    if vm_id:
+        vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
+        vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
+        if vms:
+            vm_info = vms[0]
+            if vm_info.get("state") == "Running":
+                # If VM is running, use its host
+                target_host_id = vm_info.get("hostid")
+                if target_host_id:
+                    host_data = await cs_request(request, "listHosts", {"id": target_host_id})
+                    hosts = host_data["listhostsresponse"].get("host", [])
+                    if hosts:
+                        target_host = hosts[0]
+
+    if not target_host:
+        # If VM is not running, get a random host
+        hosts_data = await cs_request(request, "listHosts", {"type": "Routing"})
+        hosts = hosts_data["listhostsresponse"].get("host", [])
+        if hosts:
+            import random
+            target_host = random.choice(hosts)
+
+    if not target_host:
+        raise HTTPException(status_code=400, detail="Cannot get host information")
+
+    target_host_ip = target_host.get("ipaddress")
 
     # Prepare payload for imageio service based on direction
     if direction == "download":
@@ -72,9 +104,11 @@ async def create_image_transfer(request: Request):
         }
         # Call imageio service to create download transfer
         async with httpx.AsyncClient(verify=False) as client:
+            headers = {"Authorization": INTERNAL_TOKEN}
             response = await client.post(
-                f"https://localhost:54322/images/download",
-                json=payload
+                f"https://{target_host_ip}:54322/images/download",
+                json=payload,
+                headers=headers
             )
             if response.status_code == 200:
                 imageio_response = response.json()
@@ -90,9 +124,11 @@ async def create_image_transfer(request: Request):
         }
         # Call imageio service to create upload transfer
         async with httpx.AsyncClient(verify=False) as client:
+            headers = {"Authorization": INTERNAL_TOKEN}
             response = await client.post(
-                f"https://localhost:54322/images/upload",
-                json=payload
+                f"https://{target_host_ip}:54322/images/upload",
+                json=payload,
+                headers=headers
             )
             if response.status_code == 200:
                 imageio_response = response.json()

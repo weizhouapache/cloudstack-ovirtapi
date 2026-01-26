@@ -30,6 +30,8 @@ if public_ip:
 elif bind_ip == "0.0.0.0":
     bind_ip = get_default_ip()
 
+# Import the internal token
+INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
 
 # =========================
 # Shared in-memory registry
@@ -77,6 +79,25 @@ def iter_file(f, length, chunk_size=1024 * 1024):
         yield data
 
 # =========================
+# Authentication middleware
+# =========================
+
+def check_internal_auth(request: Request) -> bool:
+    """
+    Check if the request contains the correct internal token in the Authorization header
+    """
+    if not INTERNAL_TOKEN:
+        # If no internal token is configured, skip authentication
+        return True
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return False
+
+    # Check if the header matches the internal token
+    return auth_header.strip() == INTERNAL_TOKEN
+
+# =========================
 # EXTENTS (qcow2 incremental)
 # =========================
 
@@ -112,7 +133,7 @@ imageio_router = APIRouter()
 # ---- Create download transfer ----
 
 @imageio_router.post("/download")
-def create_download_transfer(payload: dict):
+def create_download_transfer(payload: dict, request: Request):
     """
     payload example:
     {
@@ -121,6 +142,11 @@ def create_download_transfer(payload: dict):
         "format": "qcow2"
     }
     """
+
+    # Check internal authentication for download
+    if not check_internal_auth(request):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+
     file_path = payload["path"]
     fmt = payload.get("format", "raw")
 
@@ -145,7 +171,7 @@ def create_download_transfer(payload: dict):
 # ---- Create upload transfer ----
 
 @imageio_router.post("/upload")
-def create_upload_transfer(payload: dict):
+def create_upload_transfer(payload: dict, request: Request):
     """
     payload example:
     {
@@ -154,6 +180,10 @@ def create_upload_transfer(payload: dict):
         "size": 10737418240
     }
     """
+    # Check internal authentication for upload
+    if not check_internal_auth(request):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+
     file_path = payload["path"]
     fmt = payload.get("format", "raw")
 
@@ -183,7 +213,7 @@ def create_upload_transfer(payload: dict):
 # ---- EXTENTS endpoint ----
 
 @imageio_router.get("/{transfer_id}/extents")
-def get_extents(transfer_id: str):
+def get_extents(transfer_id: str, request: Request):
     t = transfers.get(transfer_id)
     if not t:
         raise HTTPException(404)

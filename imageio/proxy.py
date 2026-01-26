@@ -1,4 +1,41 @@
 
+import os
+import uuid
+import subprocess
+import logging
+import configparser
+from typing import Dict, List, Tuple
+from fastapi import FastAPI, APIRouter, Request, Response, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+import uvicorn
+import threading
+from imageio.logging import setup_logging
+from app.security.certs import ensure_certificates
+from app.security.certs import get_default_ip
+from imageio.config import PROXY, SSL, LOGGING
+
+
+# Setup logging similar to main.py
+logger = setup_logging()
+logger.info("Starting oVirt ImageIO Proxy")
+
+# Ensure certificates exist
+cert_file, key_file, ca_cert_file = ensure_certificates()
+logger.info(f"Using certificates: {cert_file}, {key_file}, CA: {ca_cert_file}")
+
+# Get bind IP
+bind_ip = PROXY.get("proxy_listen_host", "0.0.0.0")
+public_ip = PROXY.get("proxy_public_ip", "").strip()
+if public_ip:
+    bind_ip = public_ip
+elif bind_ip == "0.0.0.0":
+    bind_ip = get_default_ip()
+
+bind_port = PROXY.get("proxy_listen_port", 54323)
+
+# Import the internal token
+INTERNAL_TOKEN = PROXY.get("proxy_internal_token", None)
+
 # =========================
 # Proxy Service (54323)
 # =========================
@@ -35,8 +72,8 @@ def proxy(path: str, request: Request):
 def run_proxy():
     uvicorn.run(
         proxy_app,
-        host="0.0.0.0",
-        port=54323,
+        host=bind_ip,
+        port=bind_port,
         ssl_keyfile="server.key",
         ssl_certfile="server.crt",
     )

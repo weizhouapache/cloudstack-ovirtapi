@@ -1,6 +1,8 @@
 import configparser
 
-config = configparser.ConfigParser()
+config = configparser.ConfigParser(
+    inline_comment_prefixes=(';', '#')
+)
 config.read("imageio/config.ini")
 
 IMAGEIO = config["imageio"]
