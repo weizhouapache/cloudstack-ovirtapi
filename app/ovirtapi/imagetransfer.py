@@ -106,7 +106,7 @@ async def create_image_transfer(request: Request):
         async with httpx.AsyncClient(verify=False) as client:
             headers = {"Authorization": INTERNAL_TOKEN}
             response = await client.post(
-                f"https://{target_host_ip}:54322/images/download",
+                f"https://{target_host_ip}:54322/images/internal/download",
                 json=payload,
                 headers=headers
             )
@@ -126,7 +126,7 @@ async def create_image_transfer(request: Request):
         async with httpx.AsyncClient(verify=False) as client:
             headers = {"Authorization": INTERNAL_TOKEN}
             response = await client.post(
-                f"https://{target_host_ip}:54322/images/upload",
+                f"https://{target_host_ip}:54322/images/internal/upload",
                 json=payload,
                 headers=headers
             )

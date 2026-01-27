@@ -12,6 +12,7 @@ from imageio.logging import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
+from imageio.backup_service import backup_router
 
 # Setup logging similar to main.py
 logger = setup_logging()
@@ -132,7 +133,7 @@ imageio_router = APIRouter()
 
 # ---- Create download transfer ----
 
-@imageio_router.post("/download")
+@imageio_router.post("/internal/download")
 def create_download_transfer(payload: dict, request: Request):
     """
     payload example:
@@ -170,7 +171,7 @@ def create_download_transfer(payload: dict, request: Request):
 
 # ---- Create upload transfer ----
 
-@imageio_router.post("/upload")
+@imageio_router.post("/internal/upload")
 def create_upload_transfer(payload: dict, request: Request):
     """
     payload example:
@@ -334,6 +335,7 @@ async def upload_transfer(transfer_id: str, request: Request):
 
     return Response(status_code=204)
 
+# ---- OPTIONS ----
 
 @imageio_router.options("/{transfer_id}")
 async def options_imageio(transfer_id: str, request: Request):
@@ -354,6 +356,7 @@ async def options_imageio(transfer_id: str, request: Request):
 # =========================
 
 imageio_app.include_router(imageio_router, prefix=api_prefix)
+imageio_app.include_router(backup_router, prefix=api_prefix)
 
 for route in imageio_app.routes:
     logger.info(f"{route.path}  ->  {route.methods}")
