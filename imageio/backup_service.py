@@ -65,7 +65,6 @@ def save_meta(vm, meta):
     with open(tmp, "w") as f:
         json.dump(meta, f, indent=2)
     os.replace(tmp, meta_path(vm))
-    os.remove(tmp)
 
 
 # =============================
@@ -110,11 +109,28 @@ def run_full_backup(vm, dom):
 
     result = {}
 
-    for disk, src in disk_paths.items():
-        out = os.path.join(vm_dir, f"{disk}-full.qcow2")
-        cmd = ["qemu-img", "convert", "-f", "qcow2", "-O", "qcow2", src, out]
-        subprocess.run(cmd, check=True)
-        result[disk] = out
+    # Generate backup XML configuration for full backup
+    backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir)
+    # For full backup, we'll use a specific checkpoint name pattern
+    checkpoint_name = f"full-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
+
+    # Execute virsh backup-begin command for full backup
+    with open("/tmp/backup.xml", "w") as f:
+        f.write(backup_xml)
+    with open("/tmp/checkpoint.xml", "w") as f:
+        f.write(checkpoint_xml)
+
+    cmd = [
+        "virsh", "backup-begin", vm,
+        "--backupxml", "/tmp/backup.xml",
+        "--checkpointxml", "/tmp/checkpoint.xml"
+    ]
+    subprocess.run(cmd, check=True)
+
+    # Update result with target paths from backup XML
+    for disk, path in targets.items():
+        result[disk] = path
 
     return result
 
@@ -123,14 +139,23 @@ def run_full_backup(vm, dom):
 # Running VM incremental (virsh backup-begin)
 # =============================
 
-def generate_backup_xml(vm, disk_paths, vm_dir):
-    root = ET.Element("domainbackup", {"mode": "incremental"})
+def generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id=None):
+    root = ET.Element("domainbackup")
+    
+    # Add incremental element with checkpoint reference if provided
+    if checkpoint_id:
+        incr_element = ET.SubElement(root, "incremental")
+        incr_element.text = checkpoint_id
+    else:
+        # For full backup, we don't add the incremental element
+        pass
+        
     disks_elem = ET.SubElement(root, "disks")
 
     targets = {}
 
     for disk in disk_paths.keys():
-        inc_path = os.path.join(vm_dir, f"{disk}-inc.qcow2")
+        inc_path = os.path.join(vm_dir, f"{disk}-inc-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
         d = ET.SubElement(disks_elem, "disk", {"name": disk, "type": "file"})
         ET.SubElement(d, "target", {"file": inc_path})
         targets[disk] = inc_path
@@ -234,7 +259,7 @@ def backup_vm(vm: str, request: Request):
     # -------------------------
     # FULL BACKUP
     # -------------------------
-    if checkpoint_id is None:
+    if not checkpoint_id:
         full_images = run_full_backup(vm, dom)
 
         meta["mode"] = "cbt" if state == "running" else "image-diff"
@@ -291,7 +316,7 @@ def backup_vm(vm: str, request: Request):
         else:
             for disk, current in disk_paths.items():
                 previous = meta["disks"][disk]["last_backup"]
-                inc_path = os.path.join(vm_dir, f"{disk}-inc.qcow2")
+                inc_path = os.path.join(vm_dir, f"{disk}-inc-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
 
                 extents = get_image_diff_extents(current, previous)
                 if not extents:
