@@ -5,6 +5,10 @@ from app.utils.response_builder import create_response
 import httpx
 from app.config import IMAGEIO
 import json
+import time
+import uuid
+from app.ovirtapi.backup_state import BACKUPS
+from app.ovirtapi.vmsnapshots import DUMMY_VM_SNAPSHOT_ID
 
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", "")
 
@@ -69,21 +73,20 @@ async def create_backup_endpoint(vm_id: str, request: Request):
         backup_result = response.json()
 
     # 4. create oVirt-compatible response
-    backup_id = backup_result.get("new_checkpoint_id", f"backup-{vm_id}")
+    backup_id = str(uuid.uuid4())
+    new_checkpoint_id = backup_result.get("new_checkpoint_id", "")
+
+    # save backup info
+    create_backup(vm_id, backup_id, new_checkpoint_id)
     
-    # Extract disk information from the backup_result JSON
-    disk_list = []
-    if "disks" in backup_result and isinstance(backup_result["disks"], dict):
-        for disk_id in backup_result["disks"].keys():
-            disk_list.append({"id": disk_id})
-    
-    import datetime
     payload = {
         "id": backup_id,
-        "to_checkpoint_id": backup_result.get("new_checkpoint_id", backup_id),
-        "disks": disk_list,
-        "phase": "ready",
-        "creation_date": datetime.datetime.now().isoformat()
+        "to_checkpoint_id": new_checkpoint_id,
+        "phase": "starting",
+        "creation_date": int(time.time()),
+        "modification_date": int(time.time()),
+        "vm": {"id": vm_id},
+        "snapshot": {"id": DUMMY_VM_SNAPSHOT_ID},
     }
 
     if checkpoint_id:
@@ -91,22 +94,26 @@ async def create_backup_endpoint(vm_id: str, request: Request):
 
     return create_response(request, "backup", payload)
 
+@router.get("/vms/{vm_id}/backups")
+async def list_backups(vm_id: str, request: Request):
+    backups = [backup for backup in BACKUPS.values() if backup["vm_id"] == vm_id]
+    return create_response(request, "backups", backups)
+
 @router.get("/vms/{vm_id}/backups/{backup_id}")
 async def get_backup_status(vm_id: str, backup_id: str, request: Request):
     backup = get_backup(backup_id)
     if not backup:
         return Response(status_code=404)
 
-    checkpoints = [{"id": cid} for cid in backup["checkpoint_ids"]]
-
     payload = {
         "id": backup_id,
-        "state": backup["state"],
-        "checkpoints": checkpoints,
+        "phase": backup["phase"],
+        "to_checkpoint_id": backup["to_checkpoint_id"],
     }
 
     return create_response(request, "backup", payload)
 
 @router.post("/vms/{vm_id}/backups/{backup_id}/finalize")
 async def finalize_backup(vm_id: str, backup_id: str, request: Request):
+    BACKUPS.pop(backup_id)
     return Response(status_code=200)
