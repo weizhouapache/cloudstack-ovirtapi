@@ -4,9 +4,17 @@ import subprocess
 import datetime
 import xml.etree.ElementTree as ET
 import libvirt
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from app.security.certs import get_default_ip
+from imageio.config import IMAGEIO
+from imageio.utils import check_internal_auth
+
+
+# Import the internal token
+INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
+
 
 # =============================
 # Config
@@ -207,7 +215,14 @@ def get_backup_extents(image):
 # =============================
 
 @backup_router.post("/internal/backup/{vm}", response_model=BackupResponse)
-def backup_vm(vm: str, checkpoint_id: str | None = Header(default=None, alias="Checkpoint-Id")):
+def backup_vm(vm: str, request: Request):
+    # Check internal authentication
+    if not check_internal_auth(request, INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+        
+    # Get checkpoint_id from headers
+    checkpoint_id = request.headers.get("checkpoint-id")
+        
     meta = load_meta(vm)
     conn, dom = get_vm(vm)
     state = get_vm_state(dom)
@@ -307,7 +322,11 @@ def backup_vm(vm: str, checkpoint_id: str | None = Header(default=None, alias="C
 # =============================
 
 @backup_router.get("/internal/backup/{vm}/{disk}/extents")
-def get_extents(vm: str, disk: str):
+def get_extents(vm: str, disk: str, request: Request):
+    # Check internal authentication
+    if not check_internal_auth(request, INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+        
     meta = load_meta(vm)
 
     if disk not in meta["disks"]:
@@ -332,7 +351,11 @@ def get_extents(vm: str, disk: str):
 # =============================
 
 @backup_router.get("/internal/backup/{vm}/{disk}/data")
-def download_range(vm: str, disk: str, offset: int, length: int):
+def download_range(vm: str, disk: str, request: Request):
+    # Check internal authentication
+    if not check_internal_auth(request, INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+        
     meta = load_meta(vm)
 
     if disk not in meta["disks"]:
@@ -342,9 +365,39 @@ def download_range(vm: str, disk: str, offset: int, length: int):
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
+    file_size = os.path.getsize(image)
+    range_header = request.headers.get("range")
+
+    if not range_header:
+        # No range requested, return full file
+        def reader():
+            with open(image, "rb") as f:
+                yield from f
+        return StreamingResponse(reader(), media_type="application/octet-stream")
+
+    # Parse range header (format: "bytes=start-end")
+    try:
+        range_type, range_spec = range_header.split("=")
+        if range_type.strip().lower() != "bytes":
+            raise HTTPException(status_code=400, detail="Invalid range type")
+        
+        start_str, end_str = range_spec.split("-")
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+        
+        # Handle negative values and bounds checking
+        if start < 0 or start >= file_size:
+            raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+        end = min(end, file_size - 1)
+        
+        length = end - start + 1
+        
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid range format")
+
     def reader():
         with open(image, "rb") as f:
-            f.seek(offset)
+            f.seek(start)
             remaining = length
             while remaining > 0:
                 chunk = f.read(min(1024 * 1024, remaining))
@@ -353,4 +406,15 @@ def download_range(vm: str, disk: str, offset: int, length: int):
                 remaining -= len(chunk)
                 yield chunk
 
-    return StreamingResponse(reader(), media_type="application/octet-stream")
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}/*",
+        "Content-Length": str(length),
+        "Accept-Ranges": "bytes"
+    }
+
+    return StreamingResponse(
+        reader(), 
+        media_type="application/octet-stream",
+        headers=headers,
+        status_code=206
+    )

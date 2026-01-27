@@ -13,6 +13,7 @@ from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
 from imageio.backup_service import backup_router
+from imageio.utils import check_internal_auth
 
 # Setup logging similar to main.py
 logger = setup_logging()
@@ -31,7 +32,6 @@ if public_ip:
 elif bind_ip == "0.0.0.0":
     bind_ip = get_default_ip()
 
-# Import the internal token
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
 
 # =========================
@@ -80,25 +80,6 @@ def iter_file(f, length, chunk_size=1024 * 1024):
         yield data
 
 # =========================
-# Authentication middleware
-# =========================
-
-def check_internal_auth(request: Request) -> bool:
-    """
-    Check if the request contains the correct internal token in the Authorization header
-    """
-    if not INTERNAL_TOKEN:
-        # If no internal token is configured, skip authentication
-        return True
-
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        return False
-
-    # Check if the header matches the internal token
-    return auth_header.strip() == INTERNAL_TOKEN
-
-# =========================
 # EXTENTS (qcow2 incremental)
 # =========================
 
@@ -145,7 +126,7 @@ def create_download_transfer(payload: dict, request: Request):
     """
 
     # Check internal authentication for download
-    if not check_internal_auth(request):
+    if not check_internal_auth(request, INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
 
     file_path = payload["path"]
@@ -164,8 +145,8 @@ def create_download_transfer(payload: dict, request: Request):
 
     return {
         "id": transfer_id,
+        "transfer_host_ip": bind_ip,
         "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
-        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}",
         "extents_url": f"https://{bind_ip}:54322/images/{transfer_id}/extents"
     }
 
@@ -182,7 +163,7 @@ def create_upload_transfer(payload: dict, request: Request):
     }
     """
     # Check internal authentication for upload
-    if not check_internal_auth(request):
+    if not check_internal_auth(request, INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
 
     file_path = payload["path"]
@@ -207,8 +188,8 @@ def create_upload_transfer(payload: dict, request: Request):
 
     return {
         "id": transfer_id,
+        "transfer_host_ip": bind_ip,
         "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
-        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}"
     }
 
 # ---- EXTENTS endpoint ----

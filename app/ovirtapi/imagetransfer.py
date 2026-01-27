@@ -17,6 +17,8 @@ router = APIRouter()
 # In-memory store for image transfers
 image_transfers = {}
 
+bind_ip = get_default_ip()
+
 def cs_volume_to_ovirt(volume: dict) -> dict:
     """
     Convert a CloudStack Volume dict to an oVirt-compatible Disk payload.
@@ -137,8 +139,8 @@ async def create_image_transfer(request: Request):
 
     # Extract transfer ID from imageio response
     transfer_id = imageio_response.get("id")
+    transfer_host_ip = imageio_response.get("transfer_host_ip")
     transfer_url = imageio_response.get("transfer_url")
-    proxy_url = imageio_response.get("proxy_url")
 
     # Create a new image transfer record
     transfer_data = {
@@ -148,12 +150,22 @@ async def create_image_transfer(request: Request):
         "expires_at": time.time() + 3600,  # Expires in 1 hour
         "phase": "transferring",
         "transfer_url": transfer_url,
-        "proxy_url": proxy_url,
+        "proxy_url": f"https://{bind_ip}:54323/images/{transfer_id}",
         "direction": direction
     }
 
     # Store the transfer
     image_transfers[transfer_id] = transfer_data
+
+    # Tells the ImageIO Proxy to store the transfer host IP
+    async with httpx.AsyncClient(verify=False) as client:
+        headers = {"Authorization": INTERNAL_TOKEN, "transfer_id": transfer_id, "transfer_host_ip": transfer_host_ip}
+        response = await client.post(
+            f"https://{bind_ip}:54323/images/internal/store_transfer",
+            headers=headers
+        )
+        if not response.status_code == 200:
+            raise HTTPException(status_code=400, detail="Cannot update transfer host in ImageIO proxy")
 
     # Return the transfer information
     payload = {
