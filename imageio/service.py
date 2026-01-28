@@ -60,7 +60,7 @@ def parse_single_range(range_header: str, file_size: int) -> Tuple[int, int]:
     start = int(start_s)
     end = int(end_s) if end_s else file_size - 1
     if start >= file_size:
-        raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+        raise HTTPException(status_code=416, detail=f"Range Not Satisfiable: start {start} is greater than the file size {file_size}")
     end = min(end, file_size - 1)
     return start, end
 
@@ -218,6 +218,16 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
 
 # ---- DOWNLOAD with Range support ----
 
+def get_virtual_size(file_path):
+    output = subprocess.check_output(["qemu-img", "info", "-U", file_path])
+    output = output.decode("utf-8")
+    lines = output.split("\n")
+    for line in lines:
+        if line.startswith("virtual size"):
+            size = line.split()[4].split("(")[1]
+            return int(size)
+    raise ValueError(f"Could not find virtual size for {file_path}")
+
 @imageio_router.get("/{transfer_id}")
 def download_transfer(transfer_id: str, request: Request):
     t = transfers.get(transfer_id)
@@ -225,7 +235,8 @@ def download_transfer(transfer_id: str, request: Request):
         raise HTTPException(404)
 
     file_path = t["file_path"]
-    file_size = os.path.getsize(file_path)
+    #file_size = os.path.getsize(file_path)
+    file_size = get_virtual_size(file_path)
 
     range_header = request.headers.get("range")
 
