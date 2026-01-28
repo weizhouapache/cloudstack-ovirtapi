@@ -262,10 +262,14 @@ async def finalize_image_transfer(transfer_id: str, request: Request):
     
     # Return success response
     payload = {
+        "active": False,
+        "direction": transfer["direction"],
+        "format": "cow",
         "id": transfer["id"],
         "phase": transfer["phase"],
-        "direction": transfer["direction"],
-        "active": False,
+        "proxy_url": transfer["proxy_url"],
+        "shallow": True,
+        "transfer_url": transfer["transfer_url"],
         "transferred": 10000000
     }
     

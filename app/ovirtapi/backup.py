@@ -115,5 +115,17 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
 
 @router.post("/vms/{vm_id}/backups/{backup_id}/finalize")
 async def finalize_backup(vm_id: str, backup_id: str, request: Request):
+    backup = get_backup(backup_id)
+    if not backup:
+        return Response(status_code=404)
+
+    payload = {
+        "id": backup_id,
+        "phase": backup["phase"],
+        "to_checkpoint_id": backup["to_checkpoint_id"],
+    }
+
+    # remove backup from memory
     remove_backup(backup_id)
-    return Response(status_code=200)
+
+    return create_response(request, "backup", payload)
