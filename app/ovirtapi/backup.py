@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Response, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.ovirtapi.backup_state import create_backup, get_backup, get_vm_backups, remove_backup
+from app.ovirtapi.backup_state import create_backup, get_backup, get_vm_backups, remove_backup, update_backup
 from app.utils.response_builder import create_response
 import httpx
 from app.config import IMAGEIO
@@ -119,13 +119,48 @@ async def finalize_backup(vm_id: str, backup_id: str, request: Request):
     if not backup:
         return Response(status_code=404)
 
-    payload = {
-        "id": backup_id,
-        "phase": backup["phase"],
+    # update backup from memory
+    new_backup = {
+        "vm_id": backup["vm_id"],
+        "vm_name": backup["vm_name"],
         "to_checkpoint_id": backup["to_checkpoint_id"],
+        "target_host_ip": backup["target_host_ip"],
+        "phase": "succeeded",
+        "created": backup["created"],
+    }
+    update_backup(backup_id, new_backup)
+
+    payload = {
+        "status": "complete",
+    }
+    return create_response(request, "finalize_backup", payload)
+
+
+# Keep the old endpoints for volume-based snapshots if needed elsewhere
+@router.get("/vms/{vm_id}/checkpoints")
+async def list_vm_checkpoints(vm_id: str, request: Request):
+    """
+    Lists all checkpoints for a VM.
+    
+    """
+
+    # TODO: get checkpoints from a target host
+    return create_response(request, "checkpoints", {})
+
+
+@router.delete("/vms/{vm_id}/checkpoints/{checkpoint_id}")
+async def delete_vm_checkpoint(vm_id: str, checkpoint_id: str, request: Request):
+    """
+    Deletes a VM checkpoint.
+
+    In CloudStack, this corresponds to deleting a VM snapshot using deleteVMSnapshot API.
+    """
+
+    # TODO: delete a checkpoint on a target host
+
+    # Return success response with status "complete"
+    payload = {
+        "status": "complete"
     }
 
-    # remove backup from memory
-    remove_backup(backup_id)
-
-    return create_response(request, "backup", payload)
+    return create_response(request, "delete_checkpoint", payload)

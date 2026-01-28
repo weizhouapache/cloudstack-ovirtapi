@@ -314,51 +314,6 @@ async def restore_vm_from_snapshot(vm_id: str, snapshot_id: str, request: Reques
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to restore VM from snapshot: {str(e)}")
 
-# Keep the old endpoints for volume-based snapshots if needed elsewhere
-@router.get("/vms/{vm_id}/checkpoints")
-async def list_vm_checkpoints(vm_id: str, request: Request):
-    """
-    Lists all checkpoints for a VM.
-    
-    In CloudStack, these are represented as snapshots of the VM's volumes.
-    """
-    try:
-        # Get VM details to confirm it exists
-        vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
-        vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
-        
-        if not vms:
-            raise HTTPException(status_code=404, detail="VM not found")
-        
-        # Get all snapshots for volumes attached to this VM
-        volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
-        volumes = volumes_data["listvolumesresponse"].get("volume", [])
-        
-        all_snapshots = []
-        for volume in volumes:
-            # Get snapshots for this volume
-            snapshot_data = await cs_request(request, "listSnapshots", {"volumeid": volume["id"]})
-            snapshots = snapshot_data["listsnapshotsresponse"].get("snapshot", [])
-
-            # Convert each snapshot to oVirt format
-            for snapshot in snapshots:
-                # Using original conversion function for volume snapshots
-                ovirt_snapshot = {
-                    "id": snapshot["id"],
-                    "description": snapshot.get("name", f"Snapshot of {snapshot.get('volumename', 'volume')}"),
-                    "status": map_cs_state_to_ovirt(snapshot.get("state", "Created")),
-                    "date": snapshot.get("created", ""),
-                    "persist_memorystate": False,  # Volume snapshots don't capture memory state
-                }
-                ovirt_snapshot["vm"] = {"id": vm_id}  # Add VM reference
-                all_snapshots.append(ovirt_snapshot)
-
-        return create_response(request, "checkpoints", all_snapshots)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list VM checkpoints: {str(e)}")
-
 def map_cs_state_to_ovirt(cs_state: str) -> str:
     """Helper function to map CloudStack states to oVirt states"""
     state_map = {

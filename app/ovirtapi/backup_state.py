@@ -28,3 +28,6 @@ def get_vm_backups(vm_id):
 
 def remove_backup(backup_id):
     BACKUPS.pop(backup_id)
+
+def update_backup(backup_id, payload):
+    BACKUPS[backup_id].update(payload)
