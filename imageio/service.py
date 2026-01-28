@@ -12,7 +12,7 @@ from imageio.logging import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_qcow2_extents
+from imageio.backup_service import backup_router, get_extents_with_context, get_qcow2_extents, download_range
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -234,67 +234,12 @@ def download_transfer(transfer_id: str, request: Request):
     if not t or t["mode"] != "download":
         raise HTTPException(404)
 
+    vm_name = t.get("vm_name")
     file_path = t["file_path"]
     #file_size = os.path.getsize(file_path)
     file_size = get_virtual_size(file_path)
 
-    range_header = request.headers.get("range")
-
-    # Full download
-    if not range_header:
-        f = open(file_path, "rb")
-        return StreamingResponse(f, media_type="application/octet-stream")
-
-    # Multi-range
-    if "," in range_header:
-        ranges = parse_multi_range(range_header)
-        boundary = uuid.uuid4().hex
-        body = b""
-
-        with open(file_path, "rb") as f:
-            for start, end in ranges:
-                length = end - start + 1
-                f.seek(start)
-                chunk = f.read(length)
-
-                part = (
-                    f"--{boundary}\r\n"
-                    f"Content-Type: application/octet-stream\r\n"
-                    f"Content-Range: bytes {start}-{end}/{file_size}\r\n"
-                    f"\r\n"
-                ).encode() + chunk + b"\r\n"
-
-                body += part
-
-        body += f"--{boundary}--\r\n".encode()
-
-        headers = {
-            "Content-Type": f"multipart/byteranges; boundary={boundary}",
-            "Content-Length": str(len(body)),
-            "Accept-Ranges": "bytes",
-        }
-
-        return Response(content=body, status_code=206, headers=headers)
-
-    # Single range
-    start, end = parse_single_range(range_header, file_size)
-    length = end - start + 1
-
-    f = open(file_path, "rb")
-    f.seek(start)
-
-    headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(length),
-    }
-
-    return StreamingResponse(
-        iter_file(f, length),
-        status_code=206,
-        headers=headers,
-        media_type="application/octet-stream",
-    )
+    return download_range(vm_name, file_path, request)
 
 # ---- UPLOAD / RESTORE (PUT with Range) ----
 

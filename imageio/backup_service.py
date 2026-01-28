@@ -444,7 +444,7 @@ def get_backup_extents_with_context(image, context: str = "zero"):
     return extents
 
 # =============================
-# Internal method: Range download, used by service.py (to replace download_transfer ?)
+# Internal method: Range download, used by service.py
 # =============================
 
 def download_range(vm: str, diskpath: str, request: Request):
