@@ -6,7 +6,6 @@ import httpx
 from app.config import IMAGEIO
 import json
 import time
-import uuid
 from app.ovirtapi.vmsnapshots import DUMMY_VM_SNAPSHOT_ID
 
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", "")
@@ -73,7 +72,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
         backup_result = response.json()
 
     # 4. create oVirt-compatible response
-    backup_id = str(uuid.uuid4())
+    backup_id = backup_result.get("backup_id", "")
     new_checkpoint_id = backup_result.get("new_checkpoint_id", "")
 
     # save backup info

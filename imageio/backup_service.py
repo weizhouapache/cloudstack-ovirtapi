@@ -4,6 +4,7 @@ import subprocess
 import datetime
 import xml.etree.ElementTree as ET
 import libvirt
+import uuid
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -34,6 +35,7 @@ backup_router = APIRouter()
 class BackupResponse(BaseModel):
     vm_name: str
     mode: str
+    backup_id: str
     new_checkpoint_id: str
     disks: dict
 
@@ -256,6 +258,8 @@ def backup_vm(vm: str, request: Request):
     vm_dir = os.path.join(BACKUP_ROOT, vm)
     os.makedirs(vm_dir, exist_ok=True)
 
+    backup_id = str(uuid.uuid4())
+
     # -------------------------
     # FULL BACKUP
     # -------------------------
@@ -285,6 +289,7 @@ def backup_vm(vm: str, request: Request):
         return BackupResponse(
             vm_name=vm,
             mode="full",
+            backup_id=backup_id,
             new_checkpoint_id=new_cp or "none",
             disks=full_images
         )
@@ -343,6 +348,7 @@ def backup_vm(vm: str, request: Request):
         return BackupResponse(
             vm_name=vm,
             mode="incremental",
+            backup_id=backup_id,
             new_checkpoint_id=new_cp,
             disks=result
         )
