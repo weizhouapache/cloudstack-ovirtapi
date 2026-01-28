@@ -12,8 +12,9 @@ from imageio.logging import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents, get_qcow2_extents
+from imageio.backup_service import backup_router, get_extents_with_context, get_qcow2_extents
 from imageio.utils import check_internal_auth
+from app.utils.response_builder import create_response
 
 # Setup logging similar to main.py
 logger = setup_logging()
@@ -181,7 +182,7 @@ def create_upload_transfer(payload: dict, request: Request):
 # ---- EXTENTS endpoint ----
 
 @imageio_router.get("/{transfer_id}/extents")
-def get_extents(transfer_id: str, request: Request):
+def get_extents(transfer_id: str, request: Request, context: str = "zero"):
     t = transfers.get(transfer_id)
     if not t or t["mode"] != "download":
         raise HTTPException(404)
@@ -193,29 +194,23 @@ def get_extents(transfer_id: str, request: Request):
     if not backup_id and t["format"] == "raw":
         # full backup of volume for raw
         size = os.path.getsize(t["file_path"])
-        return {
+        # default to zero context
+        extents_response = {
             "extents": [
-                {"start": 0, "length": size}
+                {"start": 0, "length": size, "zero": False, "hole": False}
             ]
         }
+        return create_response(request, "extents", extents_response)
 
     if not backup_id and t["format"] == "qcow2":
         # full backup of volume for qcow2
-        extents = get_qcow2_extents(t["file_path"])
-        return {"extents": extents}
+        extents = get_qcow2_extents(t["file_path"], context)
+        extents_response = {"extents": extents}
+        return create_response(request, "extents", extents_response)
 
     # the rest is for backups
-    if backup_id and t["format"] == "raw":
-        # range for raw
-        extents = get_imageget_diff_extents(t["file_path"], t["backup_id"])
-        return {"extents": extents}
+    return get_extents_with_context(vm_name, t["file_path"], request, context)
 
-    if backup_id and t["format"] == "qcow2":
-        # range for qcow2
-        extents = get_qcow2_extents(t["file_path"])
-
-    extents = get_qcow2_extents(t["file_path"])
-    return {"extents": extents}
 
 # ---- DOWNLOAD with Range support ----
 

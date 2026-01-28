@@ -229,7 +229,7 @@ def get_backup_extents(image):
     for e in layout:
         if e.get("data", False):
             extents.append({
-                "offset": e["start"],
+                "start": e["start"],
                 "length": e["length"]
             })
     return extents
@@ -347,7 +347,7 @@ def backup_vm(vm: str, request: Request):
 # Internal method: Get extents for qcow2 file, used by backup_service.py
 # =========================
 
-def get_qcow2_extents(file_path: str):
+def get_qcow2_extents(file_path: str, context: str = "zero"):
     """
     Uses: qemu-img map -U --output=json
     Returns list of (start, length) for allocated clusters.
@@ -358,10 +358,27 @@ def get_qcow2_extents(file_path: str):
 
     extents = []
     for e in data:
-        if e.get("data", False):  # allocated
+        start = e["start"]
+        length = e["length"]
+        is_data = e.get("data", False)
+        is_zero = e.get("zero", False)
+
+        if context == "dirty":
+            # For incremental backup dirty context
+            # In real implementation, this would read from dirty bitmap
+            # For now, we'll indicate data areas as potentially dirty
             extents.append({
-                "start": e["start"],
-                "length": e["length"]
+                "start": start,
+                "length": length,
+                "dirty": is_data,  # Simplified - in real scenario, this comes from dirty bitmap
+                "zero": is_zero
+            })
+        else:  # default to "zero" context
+            extents.append({
+                "start": start,
+                "length": length,
+                "zero": is_zero,
+                "hole": not is_data
             })
     return extents
 
@@ -369,39 +386,78 @@ def get_qcow2_extents(file_path: str):
 # Internal method: Get extents for backup image, used by service.py
 # =============================
 
-def get_extents(vm: str, disk: str, request: Request):
+def get_extents_with_context(vm: str, diskpath: str, request: Request, context: str = "zero"):
 
     meta = load_meta(vm)
 
-    if disk not in meta["disks"]:
+    # Find the disk by file_path instead of assuming the disk parameter matches the key
+    disk_key = None
+    for k, v in meta["disks"].items():
+        if v.get("file_path") == diskpath:
+            disk_key = k
+            break
+
+    if not disk_key:
         raise HTTPException(status_code=404, detail="Disk not found")
 
-    image = meta["disks"][disk]["last_backup"]
+    image = meta["disks"][disk_key]["last_backup"]
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
-    extents = get_backup_extents(image)
+    extents = get_backup_extents_with_context(image, context)
 
-    return {
-        "vm": vm,
-        "disk": disk,
-        "image": image,
-        "extents": extents
-    }
+    return extents
 
+def get_backup_extents_with_context(image, context: str = "zero"):
+    cmd = ["qemu-img", "map", "-U", "--output=json", image]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=True, text=True)
+    layout = json.loads(proc.stdout)
+
+    extents = []
+    for e in layout:
+        start = e["start"]
+        length = e["length"]
+        is_data = e.get("data", False)
+        is_zero = e.get("zero", False)
+
+        if context == "dirty":
+            # For incremental backup dirty context
+            # In real implementation, this would read from dirty bitmap
+            # For now, we'll indicate data areas as potentially dirty
+            extents.append({
+                "start": start,
+                "length": length,
+                "dirty": is_data,  # Simplified - in real scenario, this comes from dirty bitmap
+                "zero": is_zero
+            })
+        else:  # default to "zero" context
+            extents.append({
+                "start": start,
+                "length": length,
+                "zero": is_zero,
+                "hole": not is_data
+            })
+    return extents
 
 # =============================
-# Internal method: Range download, used by service.py
+# Internal method: Range download, used by service.py (to replace download_transfer ?)
 # =============================
 
-def download_range(vm: str, disk: str, request: Request):
+def download_range(vm: str, diskpath: str, request: Request):
         
     meta = load_meta(vm)
 
-    if disk not in meta["disks"]:
+    # Find the disk by file_path instead of assuming the disk parameter matches the key
+    disk_key = None
+    for k, v in meta["disks"].items():
+        if v.get("file_path") == diskpath:
+            disk_key = k
+            break
+
+    if not disk_key:
         raise HTTPException(status_code=404, detail="Disk not found")
 
-    image = meta["disks"][disk]["last_backup"]
+    image = meta["disks"][disk_key]["last_backup"]
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
