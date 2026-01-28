@@ -14,6 +14,7 @@ from app.security.certs import get_default_ip
 from imageio.config import PROXY, SSL, LOGGING
 import httpx
 from imageio.utils import check_internal_auth
+from app.utils.request_logging import RequestLoggingMiddleware
 
 # Setup logging similar to main.py
 logger = setup_logging()
@@ -49,6 +50,8 @@ transfer_host_ips: Dict[str, str] = {}  # Maps transfer_id to target IP
 # =========================
 
 proxy_app = FastAPI(title="oVirt ImageIO Proxy")
+
+proxy_app.add_middleware(RequestLoggingMiddleware)
 
 proxy_router = APIRouter()
 

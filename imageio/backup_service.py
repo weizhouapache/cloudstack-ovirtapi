@@ -267,8 +267,10 @@ def backup_vm(vm: str, request: Request):
         meta["disks"] = {}
 
         for disk, path in full_images.items():
-            meta["disks"][disk]["file_path"] = disk_paths.get(disk)
-            meta["disks"][disk]["last_backup"] = path
+            meta["disks"][disk] = {
+                "last_backup": path,
+                "file_path": disk_paths.get(disk)
+            }
 
         # Create initial checkpoint if running
         new_cp = None
@@ -307,8 +309,10 @@ def backup_vm(vm: str, request: Request):
             run_virsh_backup_begin(vm, backup_xml, cp_xml)
 
             for disk, path in targets.items():
-                meta["disks"][disk]["file_path"] = disk_paths.get(disk)
-                meta["disks"][disk]["last_backup"] = path
+                meta["disks"][disk] = {
+                    "last_backup": path,
+                    "file_path": disk_paths.get(disk)
+                }
                 result[disk] = path
 
             meta["mode"] = "cbt"

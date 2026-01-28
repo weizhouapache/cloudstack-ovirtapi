@@ -160,7 +160,6 @@ async def create_image_transfer(request: Request):
     # Create a new image transfer record
     transfer_data = {
         "id": transfer_id,
-        "status": "initializing",
         "created_at": time.time(),
         "expires_at": time.time() + 3600,  # Expires in 1 hour
         "phase": "transferring",
@@ -185,7 +184,6 @@ async def create_image_transfer(request: Request):
     # Return the transfer information
     payload = {
         "id": transfer_id,
-        "status": transfer_data["status"],
         "phase": transfer_data["phase"],
         "transfer_url": transfer_data["transfer_url"],
         "proxy_url": transfer_data["proxy_url"]
@@ -203,7 +201,6 @@ async def list_image_transfers(request: Request):
     current_time = time.time()
     for transfer_id, transfer in image_transfers.items():
         if current_time > transfer["expires_at"]:
-            transfer["status"] = "expired"
             transfer["phase"] = "failed"
 
     # Prepare the list of transfers
@@ -211,7 +208,6 @@ async def list_image_transfers(request: Request):
     for transfer_id, transfer in image_transfers.items():
         transfer_info = {
             "id": transfer["id"],
-            "status": transfer["status"],
             "phase": transfer["phase"],
             "transfer_url": transfer["transfer_url"],
             "proxy_url": transfer["proxy_url"]
@@ -235,12 +231,10 @@ async def get_image_transfer(transfer_id: str, request: Request):
     # Update status based on time elapsed (for simulation purposes)
     current_time = time.time()
     if current_time > transfer["expires_at"]:
-        transfer["status"] = "expired"
         transfer["phase"] = "failed"
     
     payload = {
         "id": transfer["id"],
-        "status": transfer["status"],
         "phase": transfer["phase"],
         "transfer_url": transfer["transfer_url"],
         "proxy_url": transfer["proxy_url"]
@@ -259,16 +253,20 @@ async def finalize_image_transfer(transfer_id: str, request: Request):
     
     transfer = image_transfers[transfer_id]
     
+    # do not remove image transfer from memory
+    # image_transfers.pop(transfer_id)  
+    
     # Update transfer status to finalized
-    transfer["status"] = "completed"
     transfer["phase"] = "finished_success"
     transfer["finalized_at"] = time.time()
     
     # Return success response
     payload = {
         "id": transfer["id"],
-        "status": transfer["status"],
-        "phase": transfer["phase"]
+        "phase": transfer["phase"],
+        "direction": transfer["direction"],
+        "active": False,
+        "transferred": 10000000
     }
     
     return create_response(request, "image_transfer", payload)
@@ -285,14 +283,12 @@ async def cancel_image_transfer(transfer_id: str, request: Request):
     transfer = image_transfers[transfer_id]
     
     # Update transfer status to cancelled
-    transfer["status"] = "cancelled"
     transfer["phase"] = "aborted"
     transfer["cancelled_at"] = time.time()
     
     # Return success response
     payload = {
         "id": transfer["id"],
-        "status": transfer["status"],
         "phase": transfer["phase"]
     }
     

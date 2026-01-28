@@ -15,6 +15,8 @@ from imageio.config import IMAGEIO, SSL, LOGGING
 from imageio.backup_service import backup_router, get_extents_with_context, get_qcow2_extents
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
+from app.utils.request_logging import RequestLoggingMiddleware
+
 
 # Setup logging similar to main.py
 logger = setup_logging()
@@ -88,6 +90,8 @@ def iter_file(f, length, chunk_size=1024 * 1024):
 api_prefix = IMAGEIO.get("path", "/images")
 
 imageio_app = FastAPI(title="oVirt ImageIO Server")
+
+imageio_app.add_middleware(RequestLoggingMiddleware)
 
 imageio_router = APIRouter()
 
