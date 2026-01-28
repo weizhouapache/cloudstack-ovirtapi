@@ -9,6 +9,7 @@ import httpx
 from app.config import SERVER, IMAGEIO
 from app.security.certs import get_default_ip
 from app.config import config
+from app.ovirtapi.backup_state import get_backup
 
 INTERNAL_TOKEN = IMAGEIO.get( "internal_token", fallback="")
 
@@ -46,8 +47,10 @@ async def create_image_transfer(request: Request):
     body_str = body_bytes.decode("utf-8")
     imagetransfer_params = json.loads(body_str) if body_str else {}
     volume_id = imagetransfer_params.get("disk", {}).get("id")
+    backup_id = imagetransfer_params.get("backup", {}).get("id")        # Used for backup
     direction = imagetransfer_params.get("direction", "upload")
-    vm_id = imagetransfer_params.get("vm", {}).get("id")
+
+    vm_id = None
 
     # Get volume information from CloudStack
     if not volume_id:
@@ -62,13 +65,14 @@ async def create_image_transfer(request: Request):
             volume_path = f"/mnt/{volume_info.get('storageid')}/{volume_info.get('path')}"
             volume_format = "qcow2"  # Default format, could be determined from volume
             volume_size = volume_info.get("size")
+            vm_id = volume_info.get("virtualmachineid")
         else:
             raise HTTPException(status_code=400, detail="Volume is not found")
     except Exception as e:
         raise HTTPException(status_code=400, detail="Cannot get volume information")
 
     # Get VM information if provided
-    target_host = None
+    target_host_ip = None
     if vm_id:
         vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
         vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
@@ -82,19 +86,27 @@ async def create_image_transfer(request: Request):
                     hosts = host_data["listhostsresponse"].get("host", [])
                     if hosts:
                         target_host = hosts[0]
+                        target_host_ip = target_host.get("ipaddress")
 
-    if not target_host:
+    backup = None
+    if backup_id:
+        backup = get_backup(backup_id)
+        if not backup:
+            raise HTTPException(status_code=400, detail="Backup is not found")
+        target_host_ip = backup["target_host_ip"]
+
+    if not target_host_ip:
         # If VM is not running, get a random host
+        # TODO: This should be changed to get the host that should access the volume
         hosts_data = await cs_request(request, "listHosts", {"type": "Routing"})
         hosts = hosts_data["listhostsresponse"].get("host", [])
         if hosts:
             import random
             target_host = random.choice(hosts)
+            target_host_ip = target_host.get("ipaddress")
 
-    if not target_host:
+    if not target_host_ip:
         raise HTTPException(status_code=400, detail="Cannot get host information")
-
-    target_host_ip = target_host.get("ipaddress")
 
     # Prepare payload for imageio service based on direction
     if direction == "download":
@@ -104,6 +116,9 @@ async def create_image_transfer(request: Request):
             "path": volume_path,  # Use path from CloudStack
             "format": volume_format  # Use format from CloudStack
         }
+        if backup:
+            payload["backup_id"] = backup_id   # Used for backup
+            payload["vm_name"] = backup["vm_name"]
         # Call imageio service to create download transfer
         async with httpx.AsyncClient(verify=False) as client:
             headers = {"Authorization": INTERNAL_TOKEN}

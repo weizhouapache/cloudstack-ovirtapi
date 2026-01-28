@@ -41,7 +41,7 @@ INTERNAL_TOKEN = PROXY.get("proxy_internal_token", None)
 # =========================
 
 transfer_types: Dict[str, str] = {}  # Maps transfer_id to "imageio" or "backup"
-transfer_ips: Dict[str, str] = {}  # Maps transfer_id to target IP
+transfer_host_ips: Dict[str, str] = {}  # Maps transfer_id to target IP
 
 
 # =========================
@@ -59,8 +59,8 @@ def determine_target_host(transfer_id: str) -> Tuple[str, str]:
     Returns tuple of (base_url, service_type)
     """
     # Check if we already know the service type for this transfer_id
-    if transfer_id in transfer_ips:
-        target_ip = transfer_ips.get(transfer_id, "localhost")
+    if transfer_id in transfer_host_ips:
+        target_ip = transfer_host_ips.get(transfer_id, "localhost")
         return target_ip
     else:
         raise HTTPException(404, "Transfer ID not found")
@@ -181,7 +181,7 @@ def store_transfer(request: Request):
     # Get 
     transfer_id = request.headers.get("transfer_id")
     transfer_host_ip = request.headers.get("transfer_host_ip")
-    transfer_ips.update({transfer_id: transfer_host_ip})
+    transfer_host_ips.update({transfer_id: transfer_host_ip})
 
     return Response(status_code=200)
 

@@ -221,7 +221,7 @@ def create_incremental_from_extents(current, previous, out, extents):
 # =============================
 
 def get_backup_extents(image):
-    cmd = ["qemu-img", "map", "--output=json", image]
+    cmd = ["qemu-img", "map", "-U", "--output=json", image]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=True, text=True)
     layout = json.loads(proc.stdout)
 
@@ -267,7 +267,8 @@ def backup_vm(vm: str, request: Request):
         meta["disks"] = {}
 
         for disk, path in full_images.items():
-            meta["disks"][disk] = {"last_backup": path}
+            meta["disks"][disk]["file_path"] = disk_paths.get(disk)
+            meta["disks"][disk]["last_backup"] = path
 
         # Create initial checkpoint if running
         new_cp = None
@@ -306,6 +307,7 @@ def backup_vm(vm: str, request: Request):
             run_virsh_backup_begin(vm, backup_xml, cp_xml)
 
             for disk, path in targets.items():
+                meta["disks"][disk]["file_path"] = disk_paths.get(disk)
                 meta["disks"][disk]["last_backup"] = path
                 result[disk] = path
 
@@ -341,17 +343,34 @@ def backup_vm(vm: str, request: Request):
             disks=result
         )
 
+# =========================
+# Internal method: Get extents for qcow2 file, used by backup_service.py
+# =========================
+
+def get_qcow2_extents(file_path: str):
+    """
+    Uses: qemu-img map -U --output=json
+    Returns list of (start, length) for allocated clusters.
+    """
+    cmd = ["qemu-img", "map", "-U", "--output=json", file_path]
+    out = subprocess.check_output(cmd)
+    data = json.loads(out)
+
+    extents = []
+    for e in data:
+        if e.get("data", False):  # allocated
+            extents.append({
+                "start": e["start"],
+                "length": e["length"]
+            })
+    return extents
 
 # =============================
-# FastAPI: Get extents
+# Internal method: Get extents for backup image, used by service.py
 # =============================
 
-@backup_router.get("/internal/backup/{vm}/{disk}/extents")
 def get_extents(vm: str, disk: str, request: Request):
-    # Check internal authentication
-    if not check_internal_auth(request, INTERNAL_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
-        
+
     meta = load_meta(vm)
 
     if disk not in meta["disks"]:
@@ -372,14 +391,10 @@ def get_extents(vm: str, disk: str, request: Request):
 
 
 # =============================
-# FastAPI: Range download
+# Internal method: Range download, used by service.py
 # =============================
 
-@backup_router.get("/internal/backup/{vm}/{disk}/data")
 def download_range(vm: str, disk: str, request: Request):
-    # Check internal authentication
-    if not check_internal_auth(request, INTERNAL_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
         
     meta = load_meta(vm)
 

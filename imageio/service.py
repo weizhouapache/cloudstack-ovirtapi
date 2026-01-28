@@ -12,7 +12,7 @@ from imageio.logging import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router
+from imageio.backup_service import backup_router, get_extents, get_qcow2_extents
 from imageio.utils import check_internal_auth
 
 # Setup logging similar to main.py
@@ -79,28 +79,6 @@ def iter_file(f, length, chunk_size=1024 * 1024):
         remaining -= len(data)
         yield data
 
-# =========================
-# EXTENTS (qcow2 incremental)
-# =========================
-
-def get_qcow2_extents(file_path: str):
-    """
-    Uses: qemu-img map --output=json
-    Returns list of (start, length) for allocated clusters.
-    """
-    cmd = ["qemu-img", "map", "--output=json", file_path]
-    out = subprocess.check_output(cmd)
-    import json
-    data = json.loads(out)
-
-    extents = []
-    for e in data:
-        if e.get("data", False):  # allocated
-            extents.append({
-                "start": e["start"],
-                "length": e["length"]
-            })
-    return extents
 
 # =========================
 # ImageIO Service (54322)
@@ -121,7 +99,9 @@ def create_download_transfer(payload: dict, request: Request):
     {
         "id": "disk-1",
         "path": "/data/disk1.qcow2",
-        "format": "qcow2"
+        "format": "qcow2",
+        "vm_name": "vm-1",
+        "backup_id": "backup-1"
     }
     """
 
@@ -131,6 +111,9 @@ def create_download_transfer(payload: dict, request: Request):
 
     file_path = payload["path"]
     fmt = payload.get("format", "raw")
+    volume_id = payload.get("id", None)
+    backup_id = payload.get("backup_id", None)
+    vm_name = payload.get("vm_name", None)
 
     if not os.path.exists(file_path):
         raise HTTPException(404, "Disk not found")
@@ -140,6 +123,9 @@ def create_download_transfer(payload: dict, request: Request):
     transfers[transfer_id] = {
         "file_path": file_path,
         "format": fmt,
+        "vm_name": vm_name,
+        "volume_id": volume_id,
+        "backup_id": backup_id,     # For backups only
         "mode": "download"
     }
 
@@ -197,17 +183,36 @@ def create_upload_transfer(payload: dict, request: Request):
 @imageio_router.get("/{transfer_id}/extents")
 def get_extents(transfer_id: str, request: Request):
     t = transfers.get(transfer_id)
-    if not t:
+    if not t or t["mode"] != "download":
         raise HTTPException(404)
 
-    if t["format"] != "qcow2":
-        # Raw -> full backup: single extent
+    vm_name = t.get("vm_name")
+    volume_id = t.get("volume_id")
+    backup_id = t.get("backup_id")
+
+    if not backup_id and t["format"] == "raw":
+        # full backup of volume for raw
         size = os.path.getsize(t["file_path"])
         return {
             "extents": [
                 {"start": 0, "length": size}
             ]
         }
+
+    if not backup_id and t["format"] == "qcow2":
+        # full backup of volume for qcow2
+        extents = get_qcow2_extents(t["file_path"])
+        return {"extents": extents}
+
+    # the rest is for backups
+    if backup_id and t["format"] == "raw":
+        # range for raw
+        extents = get_imageget_diff_extents(t["file_path"], t["backup_id"])
+        return {"extents": extents}
+
+    if backup_id and t["format"] == "qcow2":
+        # range for qcow2
+        extents = get_qcow2_extents(t["file_path"])
 
     extents = get_qcow2_extents(t["file_path"])
     return {"extents": extents}

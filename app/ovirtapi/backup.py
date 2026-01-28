@@ -1,13 +1,12 @@
 from fastapi import APIRouter, Response, Request, HTTPException
 from app.cloudstack.client import cs_request
-from app.ovirtapi.backup_state import create_backup, get_backup
+from app.ovirtapi.backup_state import create_backup, get_backup, get_vm_backups, remove_backup
 from app.utils.response_builder import create_response
 import httpx
 from app.config import IMAGEIO
 import json
 import time
 import uuid
-from app.ovirtapi.backup_state import BACKUPS
 from app.ovirtapi.vmsnapshots import DUMMY_VM_SNAPSHOT_ID
 
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", "")
@@ -41,6 +40,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
                 target_host = hosts[0]
     else:
         # If VM is not running, get a random host
+        # TODO: This should be changed to get the host that should access the volume
         hosts_data = await cs_request(request, "listHosts", {"type": "Routing"})
         hosts = hosts_data["listhostsresponse"].get("host", [])
         if hosts:
@@ -77,7 +77,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
     new_checkpoint_id = backup_result.get("new_checkpoint_id", "")
 
     # save backup info
-    create_backup(vm_id, backup_id, new_checkpoint_id)
+    create_backup(vm_id, vm_name, backup_id, new_checkpoint_id, target_host_ip)
     
     payload = {
         "id": backup_id,
@@ -96,7 +96,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
 
 @router.get("/vms/{vm_id}/backups")
 async def list_backups(vm_id: str, request: Request):
-    backups = [backup for backup in BACKUPS.values() if backup["vm_id"] == vm_id]
+    backups = get_vm_backups(vm_id)
     return create_response(request, "backups", backups)
 
 @router.get("/vms/{vm_id}/backups/{backup_id}")
@@ -115,5 +115,5 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
 
 @router.post("/vms/{vm_id}/backups/{backup_id}/finalize")
 async def finalize_backup(vm_id: str, backup_id: str, request: Request):
-    BACKUPS.pop(backup_id)
+    remove_backup(backup_id)
     return Response(status_code=200)
