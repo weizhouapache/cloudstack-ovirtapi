@@ -6,9 +6,9 @@ BACKUPS = {}
 def create_backup(vm_id, vm_name, backup_id, to_checkpoint_id, target_host_ip):
 
     # remove all backups for this VM
-    for backup_id, backup in list(BACKUPS.items()):
+    for item_backup_id, backup in list(BACKUPS.items()):
         if backup["vm_id"] == vm_id:
-            del BACKUPS[backup_id]
+            del BACKUPS[item_backup_id]
 
     BACKUPS[backup_id] = {
         "vm_id": vm_id,

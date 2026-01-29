@@ -108,6 +108,8 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
         "id": backup_id,
         "phase": backup["phase"],
         "to_checkpoint_id": backup["to_checkpoint_id"],
+        "vm": {"id": vm_id},
+        "snapshot": {"id": DUMMY_VM_SNAPSHOT_ID},
     }
 
     return create_response(request, "backup", payload)
