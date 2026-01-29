@@ -14,6 +14,15 @@ async def list_datacenters(request: Request):
 
     return create_response(request, "data_centers", payload)
 
+@router.get("/datacenters/{datacenter_id}")
+async def get_datacenter(datacenter_id: str, request: Request):
+    data = await cs_request(request, "listZones", {"id": datacenter_id})
+    zone = data["listzonesresponse"].get("zone", [])[0]
+
+    payload = cs_zone_to_ovirt(zone)
+
+    return create_response(request, "data_centers", payload)
+
 def cs_zone_to_ovirt(zone: dict) -> dict:
     """
     Convert a CloudStack Zone dict to an oVirt-compatible DataCenter payload.
@@ -33,6 +42,9 @@ def cs_cluster_to_ovirt(cluster: dict) -> dict:
         "name": cluster["name"],
         "data_center": {"id": cluster["zoneid"]},
         "cpu": {"architecture": "x86_64"},
+        "version": {"major": 4, "minor": 8},
+        "virt_service" : "true",
+        "vnc_encryption" : "false",
     }
 
 @router.get("/clusters")
@@ -98,6 +110,13 @@ def cs_host_to_ovirt(host: dict) -> dict:
                 "minor": 22
             },
             "description": host.get("version", "")
+        },
+        "libvirt_version" : {
+            "build" : "0",
+            "full_version" : "libvirt-10.10.0-15.4.el9_7.alma.1",
+            "major" : "10",
+            "minor" : "10",
+            "revision" : "0"
         },
         "power_management": {
             "enabled": "false"  # Default to false as CloudStack doesn't provide this info

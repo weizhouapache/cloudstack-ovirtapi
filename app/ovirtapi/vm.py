@@ -3,6 +3,7 @@ from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
 from app.utils.async_job import wait_for_job, get_job_id
 from app.config import SERVER
+from app.utils.logging_config import logger
 
 import json
 
@@ -408,8 +409,8 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             "enabled": "false"
         },
         "cluster": {
-            "href": f"/ovirt-engine/api/clusters/{vm.get('clusterid', vm.get('zoneid', 'dynamic-cluster'))}",
-            "id": vm.get('clusterid', vm.get('zoneid', 'dynamic-cluster'))
+            "href": f"/ovirt-engine/api/clusters/{vm.get('clusterid')}",
+            "id": vm.get('clusterid')
         },
         "quota": {
             "id": vm.get('zoneid')
@@ -551,7 +552,20 @@ async def list_vms(request: Request):
     )
     vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
 
-    payload = [await cs_vm_to_ovirt(vm, request) for vm in vms]
+    host_data = await cs_request(request, "listHosts", {"type": "Routing"})
+    hosts = host_data["listhostsresponse"].get("host", [])
+
+    payload = []
+    # for each vm, get the host id and add it to the vm
+    for vm in vms:
+        host_id = vm.get("hostid")
+        logger.debug(f"host id: {host_id}")
+        if host_id:
+            # get host information from hosts data
+            host = next((host for host in hosts if host.get("id") == host_id), None)
+            logger.debug(f"host: {host}")
+            vm["clusterid"] = host.get("clusterid")
+        payload.append(await cs_vm_to_ovirt(vm, request))
 
     return create_response(request, "vms", payload)
 
@@ -568,6 +582,16 @@ async def get_vm(vm_id: str, request: Request):
         raise HTTPException(status_code=404, detail="VM not found")
 
     vm = vms[0]
+
+    if vm and vm.get("hostid"):
+        # get host information based on the vm's hostid
+        host_data = await cs_request(request, "listHosts", {"id": vm.get("hostid")})
+        hosts = host_data["listhostsresponse"].get("host", [])
+
+        if hosts:
+            host = hosts[0]            
+            vm["clusterid"] = host.get("clusterid")
+
     payload = await cs_vm_to_ovirt(vm, request)
 
     return create_response(request, "vm", payload)
@@ -828,8 +852,7 @@ async def create_vm(request: Request):
 
         # Add zone/cluster information if provided
         if cluster_id:
-            # If cluster_id is provided, we can use it as zoneid for CloudStack
-            # Alternatively, we might need to look up the actual zone ID
+            # If cluster_id is provided, we can use it to get zoneid for CloudStack
             try:
                 cluster_data = await cs_request(request, "listClusters", {"id": cluster_id})
                 clusters = cluster_data["listclustersresponse"].get("cluster", [])
@@ -838,15 +861,8 @@ async def create_vm(request: Request):
                     zone_id = clusters[0].get("zoneid")
                     if zone_id:
                         cs_params["zoneid"] = zone_id
-                    else:
-                        # If no zone ID found in cluster, use cluster_id as zoneid
-                        cs_params["zoneid"] = cluster_id
-                else:
-                    # If cluster not found, use cluster_id as zoneid
-                    cs_params["zoneid"] = cluster_id
             except:
-                # If there's an error looking up the cluster, use cluster_id as zoneid
-                cs_params["zoneid"] = cluster_id
+                pass
 
         # Call CloudStack API to create the VM
         data = await cs_request(request, "deployVirtualMachine", cs_params, method="POST")
