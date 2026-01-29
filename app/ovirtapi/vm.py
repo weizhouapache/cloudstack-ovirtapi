@@ -376,7 +376,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
         "io": {
             "threads": "1"
         },
-        "memory": str(vm.get("memory", 6442450944)),  # Default to 6GB
+        "memory": int(vm.get("memory", "6144")) * 1024 * 1024,  # Default to 6GB
         "migration": {
             "auto_converge": "inherit",
             "compressed": "inherit",
@@ -510,8 +510,8 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
         },
         "memory_policy": {
             "ballooning": "true",
-            "guaranteed": str(vm.get("memory", 6442450944)),
-            "max": str(vm.get("memory", 6442450944))
+            "guaranteed": int(vm.get("memory", "1024")) * 1024 * 1024,
+            "max": int(vm.get("memory", "1024")) * 1024 * 1024,
         },
         "migration_downtime": "0",
         "multi_queues_enabled": "true",
