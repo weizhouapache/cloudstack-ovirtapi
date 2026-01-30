@@ -11,17 +11,88 @@ def cs_volume_to_ovirt(volume: dict) -> dict:
     """
     Convert a CloudStack Volume dict to an oVirt-compatible Disk payload.
     """
+    volume_id = volume["id"]
+    storage_id = volume.get("storageid", "default-storage-domain")
+    zone_id = volume.get("zoneid", "default-zone")
+
     return {
-        "id": volume["id"],
-        "name": volume.get("name", volume["id"]),
+        "actual_size": str(volume.get("size", 0)),
+        "alias": volume.get("name", volume_id),
+        "backup": "none",
+        "content_type": "data",
+        "format": "cow" if volume.get("format", "qcow2") == "qcow2" else "raw",
+        "image_id": volume_id,
+        "propagate_errors": "false",
+        "provisioned_size": str(volume.get("size", 0)),
+        "shareable": "false",
+        "sparse": str(volume.get("issparse", True)).lower(),
         "status": "ok" if volume.get("state") == "Ready" else "locked",
-        "actual_size": volume.get("size", 0),
-        "provisioned_size": volume.get("size", 0),
-        "sparse": volume.get("issparse", True),
-        "bootable": volume.get("isbootable", False),
-        "active": True,  # Assuming active for simplicity
-        "wipe_after_delete": False,  # Default value
-        "propagate_errors": False,   # Default value
+        "storage_type": "image",
+        "wipe_after_delete": "false",
+        "disk_profile": {
+            "href": f"/ovirt-engine/api/diskprofiles/{volume_id}",
+            "id": volume_id
+        },
+        "quota": {
+            "href": f"/ovirt-engine/api/datacenters/{zone_id}/quotas/{zone_id}",
+            "id": zone_id
+        },
+        "storage_domains": {
+            "storage_domain": [{
+                "href": f"/ovirt-engine/api/storagedomains/{storage_id}",
+                "id": storage_id
+            }]
+        },
+        "actions": {
+            "link": [
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/reduce",
+                    "rel": "reduce"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/copy",
+                    "rel": "copy"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/export",
+                    "rel": "export"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/move",
+                    "rel": "move"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/refreshlun",
+                    "rel": "refreshlun"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/convert",
+                    "rel": "convert"
+                },
+                {
+                    "href": f"/ovirt-engine/api/disks/{volume_id}/sparsify",
+                    "rel": "sparsify"
+                }
+            ]
+        },
+        "name": volume.get("name", volume_id),
+        "description": volume.get("displaytext", ""),
+        "link": [
+            {
+                "href": f"/ovirt-engine/api/disks/{volume_id}/disksnapshots",
+                "rel": "disksnapshots"
+            },
+            {
+                "href": f"/ovirt-engine/api/disks/{volume_id}/permissions",
+                "rel": "permissions"
+            },
+            {
+                "href": f"/ovirt-engine/api/disks/{volume_id}/statistics",
+                "rel": "statistics"
+            }
+        ],
+        "href": f"/ovirt-engine/api/disks/{volume_id}",
+        "id": volume_id
     }
 
 @router.get("/disks")
