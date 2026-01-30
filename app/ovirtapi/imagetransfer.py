@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, Response
 from app.cloudstack.client import cs_request
 from app.utils.response_builder import create_response
+from app.utils.logging_config import logger
 import uuid
 import time
 import json
@@ -172,14 +173,18 @@ async def create_image_transfer(request: Request):
     image_transfers[transfer_id] = transfer_data
 
     # Tells the ImageIO Proxy to store the transfer host IP
-    async with httpx.AsyncClient(verify=False) as client:
-        headers = {"Authorization": INTERNAL_TOKEN, "transfer_id": transfer_id, "transfer_host_ip": transfer_host_ip}
-        response = await client.post(
-            f"https://{bind_ip}:54323/images/internal/store_transfer",
-            headers=headers
-        )
-        if not response.status_code == 200:
-            raise HTTPException(status_code=400, detail="Cannot update transfer host in ImageIO proxy")
+    try:
+        async with httpx.AsyncClient(verify=False) as client:
+            headers = {"Authorization": INTERNAL_TOKEN, "transfer_id": transfer_id, "transfer_host_ip": transfer_host_ip}
+            response = await client.post(
+                f"https://{bind_ip}:54323/images/internal/store_transfer",
+                headers=headers
+            )
+            if not response.status_code == 200:
+                raise HTTPException(status_code=400, detail="Cannot update transfer host in ImageIO proxy")
+    except Exception as e:
+        logger.error(f"Error updating transfer host in ImageIO proxy: {e}")
+        pass
 
     # Return the transfer information
     payload = {
