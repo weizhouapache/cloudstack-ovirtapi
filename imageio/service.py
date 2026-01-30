@@ -261,9 +261,11 @@ async def upload_transfer(transfer_id: str, request: Request):
                 f.write(chunk)
 
     else:
-        # Example: bytes 2097152-2162687
+        # Example: bytes 2097152-2162687/3758096384
         _, range_part = range_header.split(" ")
-        start_s, end_s = range_part.split("-")
+        range_and_size = range_part.split("/")
+        range_only = range_and_size[0]  # This will be "2097152-2162687"
+        start_s, end_s = range_only.split("-")
         start = int(start_s)
         end = int(end_s)
 
