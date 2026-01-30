@@ -6,6 +6,7 @@ from app.config import SERVER
 from app.utils.logging_config import logger
 
 import json
+import time
 
 router = APIRouter()
 api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
@@ -62,24 +63,25 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             "read_only": "false",
             "uses_scsi_reservation": "false",
             "disk": {
-                "actual_size": str(volume.get("size", "1239158784")),
+                "actual_size": int(volume.get("size", "1239158784")),
                 "alias": volume.get("name", f"Veeam_KvmBackupDisk_{vm.get('name', 'test-vm')}"),
                 "backup": "none",
                 "content_type": "data",
                 "format": "cow",
                 "image_id": volume.get("id"),
+                "initial_size": int(volume.get("size", "1239158784")),
                 "propagate_errors": "false",
-                "provisioned_size": str(volume.get("size", "107374182400")),
+                "provisioned_size": int(volume.get("size", "107374182400")),
                 "qcow_version": "qcow2_v3",
                 "shareable": "false",
                 "sparse": str(volume.get("issparse", True)).lower(),
                 "status": "ok",
                 "storage_type": "image",
-                "total_size": str(volume.get("size", "1239158784")),
+                "total_size": int(volume.get("size", "1239158784")),
                 "wipe_after_delete": "false",
                 "disk_profile": {
-                    "href": f"/ovirt-engine/api/diskprofiles/{storage_id}",
-                    "id": storage_id
+                    "href": f"/ovirt-engine/api/diskprofiles/{volume.get('id')}",
+                    "id": volume.get('id')
                 },
                 "quota": {
                     "href": f"/ovirt-engine/api/datacenters/{vm.get('zoneid')}/quotas/{vm.get('zoneid')}",
@@ -352,7 +354,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             "boot_menu": {
                 "enabled": "false"
             },
-            "type": "q35_secure_boot"
+            "type": "q35_ovmf"
         },
         "cpu": {
             "architecture": "x86_64",
@@ -363,6 +365,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             }
         },
         "display": {
+            "address": "127.0.0.1",
             "allow_override": "false",
             "copy_paste_enabled": "true",
             "disconnect_action": "LOCK_SCREEN",
@@ -404,7 +407,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             }
         },
         "stateless": "false",
-        "type": "desktop",
+        "type": "server",
         "usb": {
             "enabled": "false"
         },
@@ -498,7 +501,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
         "auto_pinning_policy": "disabled",
         "cpu_pinning_policy": "none",
         "cpu_shares": "0",
-        "creation_time": 1767630835851,
+        "creation_time": int(time.time()),
         "delete_protected": "false",
         "high_availability": {
             "enabled": "false",
@@ -513,7 +516,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
             "guaranteed": int(vm.get("memory", "1024")) * 1024 * 1024,
             "max": int(vm.get("memory", "1024")) * 1024 * 1024,
         },
-        "migration_downtime": "0",
+        "migration_downtime": -1,
         "multi_queues_enabled": "true",
         "placement_policy": {
             "affinity": "migratable"
@@ -977,12 +980,13 @@ async def get_vm_disk_attachment(vm_id: str, request: Request):
                 "id": volume.get("id", f"disk-{i}"),
                 "href": f"/ovirt-engine/api/disks/{volume_id}",
                 "name": volume.get("name", volume_id),
-                "actual_size": str(volume.get("size", 0)),
-                "provisioned_size": str(volume.get("size", 0)),
+                "actual_size": int(volume.get("size", 0)),
+                "provisioned_size": int(volume.get("size", 0)),
                 "status": "ok" if volume.get("state") == "Ready" else "locked",
                 "sparse": str(volume.get("issparse", True)).lower(),
                 "bootable": str(volume.get("isbootable", False)).lower(),
                 "propagate_errors": "false",
+                "qcow_version": "qcow2_v3",
                 "wipe_after_delete": "false",
                 "content_type": "data",
                 "format": "cow",
