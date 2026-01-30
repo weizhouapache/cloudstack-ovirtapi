@@ -114,7 +114,12 @@ async def delete_disk(disk_id: str, request: Request):
         # Call CloudStack API to delete the volume
         data = await cs_request(request, "deleteVolume", cs_params)
 
-        return Response(status_code=200)
+        # Return success response with status "complete"
+        payload = {
+            "status": "complete"
+        }
+
+        return create_response(request, "delete_volume", payload)
 
     except HTTPException:
         raise
