@@ -294,6 +294,15 @@ async def options_imageio(transfer_id: str, request: Request):
     }
     return JSONResponse(content=capabilities, status_code=200)
 
+@imageio_router.patch("/{transfer_id}")
+async def patch_imageio(transfer_id: str, request: Request):
+    # get data from request
+    data = await request.json()
+    logger.debug(f"patch tranfer {transfer_id} with data: {data}")
+
+    return Response(status_code=200)
+
+
 # =========================
 # Run ImageIO Service
 # =========================
