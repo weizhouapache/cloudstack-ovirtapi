@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_backup_extents_with_context, download_range
+from imageio.backup_service import backup_router, get_extents_with_context, get_backup_extents_with_context, download_range, CHUNK_SIZE
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -71,10 +71,10 @@ def parse_multi_range(range_header: str) -> List[Tuple[int, int]]:
         result.append((int(s), int(e)))
     return result
 
-def iter_file(f, length, chunk_size=1024 * 1024):
+def iter_file(f, length):
     remaining = length
     while remaining > 0:
-        size = min(chunk_size, remaining)
+        size = min(CHUNK_SIZE, remaining)
         data = f.read(size)
         if not data:
             break

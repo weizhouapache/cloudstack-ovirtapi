@@ -4,6 +4,7 @@ import subprocess
 import datetime
 import xml.etree.ElementTree as ET
 import libvirt
+import nbd
 import uuid
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -17,6 +18,7 @@ from imageio.logging_imageio import logger
 # Import the internal token
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
 
+CHUNK_SIZE=1024*1024
 
 # =============================
 # Config
@@ -408,7 +410,16 @@ def get_extents_with_context(vm: str, diskpath: str, request: Request, context: 
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
-    extents = get_backup_extents_with_context(image, context)
+    # extents = get_backup_extents_with_context(image, context)
+
+    if context == "dirty":
+        # Incremental backup
+        # TODO: get the file path of the previous backup
+        dirty_blocks = get_dirty_blocks(image, meta["disks"][disk_key]["last_backup"])  # offsets of changed blocks
+        extents = get_extents("/backup/vm1.qcow2", context="dirty", dirty_blocks=dirty_blocks)
+    else:
+        # Full backup
+        extents = get_extents_via_nbd(image, context)
 
     return extents
 
@@ -519,14 +530,30 @@ def download_range(vm: str, diskpath: str, request: Request):
                 remaining -= len(chunk)
                 yield chunk
 
+    def reader_via_nbd(start: int, length: int, image: str):
+        conn = nbd.NBD()
+        try:
+            conn.connect_unix(get_nbd_socket_path(image))
+            offset = start
+            remaining = length
+
+            while remaining > 0:
+                chunk_len = min(CHUNK_SIZE, remaining)
+                data = conn.pread(chunk_len, offset)
+                yield data
+                offset += chunk_len
+                remaining -= chunk_len
+        finally:
+            conn.close()
+
     headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}/*",
+        "Content-Range": f"bytes {start}-{start+length-1}/{file_size}/*",
         "Content-Length": str(length),
         "Accept-Ranges": "bytes"
     }
 
     return StreamingResponse(
-        reader(), 
+        reader_via_nbd(start, length, image),
         media_type="application/octet-stream",
         headers=headers,
         status_code=206
@@ -555,3 +582,105 @@ def get_backup_status(vm: str, request: Request):
         backup_in_progress=status_info["backup_in_progress"],
         job_info=status_info["job_info"]
     )
+
+# =============================
+# Internal method: Get extents for qcow2 file via libnbd
+# =============================
+
+
+def get_extents_via_nbd(image_path, context="zero", dirty_blocks=None):
+    """
+    Generate image extents for Veeam from raw or qcow2 image.
+
+    :param image_path: path to qcow2/raw image
+    :param context: "zero" for full backup, "dirty" for incremental
+    :param dirty_blocks: optional set of dirty block offsets for incremental
+    :return: list of extents dictionaries
+    """
+    extents = []
+    conn = nbd.NBD()
+    try:
+        conn.connect_unix(get_nbd_socket_path(image_path))
+        img_size = conn.get_size()  # virtual size
+
+        offset = 0
+        while offset < img_size:
+            length = min(CHUNK_SIZE, img_size - offset)
+            data = conn.pread(length, offset)  # read virtual bytes
+
+            is_zero = all(b == 0 for b in data)
+            if context == "dirty":
+                # dirty block if dirty_blocks is provided and offset is in it
+                dirty = (dirty_blocks is None or offset in dirty_blocks) and not is_zero
+                extents.append({
+                    "start": offset,
+                    "length": length,
+                    "dirty": dirty,
+                    "zero": is_zero
+                })
+            else:  # context == "zero"
+                # hole detection: if qcow2 and fully zero, consider it a hole
+                hole = is_zero and conn.is_hole(offset, length) if hasattr(conn, "is_hole") else False
+                extents.append({
+                    "start": offset,
+                    "length": length,
+                    "zero": is_zero,
+                    "hole": hole
+                })
+
+            offset += length
+    finally:
+        conn.close()  # must close explicitly
+
+    # Merge adjacent extents with same flags to reduce number of extents
+    merged = []
+    for e in extents:
+        if not merged:
+            merged.append(e)
+            continue
+        last = merged[-1]
+        if context == "zero":
+            if e["zero"] == last["zero"] and e.get("hole", False) == last.get("hole", False) and last["start"] + last["length"] == e["start"]:
+                last["length"] += e["length"]
+            else:
+                merged.append(e)
+        else:
+            if e["dirty"] == last["dirty"] and e["zero"] == last["zero"] and last["start"] + last["length"] == e["start"]:
+                last["length"] += e["length"]
+            else:
+                merged.append(e)
+    return merged
+
+# =============================
+# Internal method: Get dirty blocks between two qcow2 images
+# =============================
+
+def get_dirty_blocks(curr_image, prev_image, block_size=1024*1024):
+    dirty_blocks = set()
+    curr = nbd.NBD()
+    prev = nbd.NBD()
+    try:
+        curr.connect_unix(get_nbd_socket_path(curr_image))
+        prev.connect_unix(get_nbd_socket_path(prev_image))
+
+        size = curr.get_size()
+        for offset in range(0, size, block_size):
+            length = min(block_size, size - offset)
+            curr_data = curr.pread(length, offset)
+            prev_data = prev.pread(length, offset)
+            if curr_data != prev_data:
+                dirty_blocks.add(offset)
+
+    finally:
+        curr.close()  # must close explicitly
+        prev.close()
+
+    return dirty_blocks
+
+def get_nbd_socket_path(image):
+    # replace "/" in path with "-" and remove the first letter
+    socket_name = image.replace("/", "-")[1:]
+    socket_path = f"/tmp/{socket_name}.sock"
+    cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", "--fork", f"--socket={socket_path}", image]
+    subprocess.run(cmd, check=True)
+    return f"{socket_path}"

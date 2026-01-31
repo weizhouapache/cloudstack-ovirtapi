@@ -5,3 +5,4 @@ lxml
 cryptography
 python-multipart
 libvirt
+nbd
