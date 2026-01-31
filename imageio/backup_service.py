@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import libvirt
 import nbd
 import uuid
+import time
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -18,7 +19,6 @@ from imageio.logging_imageio import logger
 # Import the internal token
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
 
-CHUNK_SIZE=1024*1024
 
 # =============================
 # Config
@@ -28,6 +28,8 @@ BACKUP_ROOT = "/backup"
 META_ROOT = "/backup/meta"
 CLUSTER_SIZE = 65536
 KEEP_CHECKPOINTS = 1
+
+CHUNK_SIZE=1024*1024
 
 backup_router = APIRouter()
 
@@ -414,9 +416,9 @@ def get_extents_with_context(vm: str, diskpath: str, request: Request, context: 
 
     if context == "dirty":
         # Incremental backup
-        # TODO: get the file path of the previous backup
+        # TODO: save and get the file path of the previous backup here
         dirty_blocks = get_dirty_blocks(image, meta["disks"][disk_key]["last_backup"])  # offsets of changed blocks
-        extents = get_extents("/backup/vm1.qcow2", context="dirty", dirty_blocks=dirty_blocks)
+        extents = get_extents_via_nbd(image, context="dirty", dirty_blocks=dirty_blocks)
     else:
         # Full backup
         extents = get_extents_via_nbd(image, context)
@@ -489,15 +491,50 @@ def download_range(vm: str, diskpath: str, request: Request):
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
+    def reader(start, length, image):
+        with open(image, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    def reader_via_nbd(start: int, length: int, image: str):
+        socket_path, proc = create_nbd_socket(image)
+        conn = nbd.NBD()
+        try:
+            conn.connect_unix(socket_path)
+            offset = start
+            remaining = length
+
+            while remaining > 0:
+                chunk_len = min(CHUNK_SIZE, remaining)
+                data = conn.pread(chunk_len, offset)
+                if not data:
+                    data = b"\x00" * chunk_len
+                yield bytes(data)
+                offset += chunk_len
+                remaining -= chunk_len
+        finally:
+            conn.close()
+            proc.terminate()
+            proc.wait()
+            if os.path.exists(socket_path):
+                os.unlink(socket_path)
+
     file_size = os.path.getsize(image)
     range_header = request.headers.get("range")
 
     if not range_header:
         # No range requested, return full file
-        def reader():
-            with open(image, "rb") as f:
-                yield from f
-        return StreamingResponse(reader(), media_type="application/octet-stream")
+        return StreamingResponse(
+            reader_via_nbd(0, file_size, image),
+            headers={"Content-Length": str(file_size)},
+            media_type="application/octet-stream"
+        )
 
     # Parse range header (format: "bytes=start-end")
     try:
@@ -519,34 +556,7 @@ def download_range(vm: str, diskpath: str, request: Request):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid range format")
 
-    def reader():
-        with open(image, "rb") as f:
-            f.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = f.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
 
-    def reader_via_nbd(start: int, length: int, image: str):
-        conn = nbd.NBD()
-        try:
-            conn.connect_unix(get_nbd_socket_path(image))
-            offset = start
-            remaining = length
-
-            while remaining > 0:
-                chunk_len = min(CHUNK_SIZE, remaining)
-                data = conn.pread(chunk_len, offset)
-                if not data:
-                    data = b"\x00" * chunk_len
-                yield bytes(data)
-                offset += chunk_len
-                remaining -= chunk_len
-        finally:
-            conn.close()
 
     headers = {
         "Content-Range": f"bytes {start}-{start+length-1}/{file_size}/*",
@@ -590,19 +600,21 @@ def get_backup_status(vm: str, request: Request):
 # =============================
 
 
-def get_extents_via_nbd(image_path, context="zero", dirty_blocks=None):
+def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
     """
     Generate image extents for Veeam from raw or qcow2 image.
 
-    :param image_path: path to qcow2/raw image
+    :param image: path to qcow2/raw image
     :param context: "zero" for full backup, "dirty" for incremental
     :param dirty_blocks: optional set of dirty block offsets for incremental
     :return: list of extents dictionaries
     """
+
     extents = []
+    socket_path, proc = create_nbd_socket(image)
     conn = nbd.NBD()
     try:
-        conn.connect_unix(get_nbd_socket_path(image_path))
+        conn.connect_unix(socket_path)
         img_size = conn.get_size()  # virtual size
 
         offset = 0
@@ -633,6 +645,10 @@ def get_extents_via_nbd(image_path, context="zero", dirty_blocks=None):
             offset += length
     finally:
         conn.close()  # must close explicitly
+        proc.terminate()
+        proc.wait()
+        if os.path.exists(socket_path):
+            os.unlink(socket_path)
 
     # Merge adjacent extents with same flags to reduce number of extents
     merged = []
@@ -651,6 +667,9 @@ def get_extents_via_nbd(image_path, context="zero", dirty_blocks=None):
                 last["length"] += e["length"]
             else:
                 merged.append(e)
+
+    logger.info(f"Extents of {image}: {merged}")
+
     return merged
 
 # =============================
@@ -659,11 +678,13 @@ def get_extents_via_nbd(image_path, context="zero", dirty_blocks=None):
 
 def get_dirty_blocks(curr_image, prev_image, block_size=1024*1024):
     dirty_blocks = set()
+    socket_path_curr, proc_curr = create_nbd_socket(image_path)
+    socket_path_prev, proc_prev = create_nbd_socket(prev_image)
     curr = nbd.NBD()
     prev = nbd.NBD()
     try:
-        curr.connect_unix(get_nbd_socket_path(curr_image))
-        prev.connect_unix(get_nbd_socket_path(prev_image))
+        curr.connect_unix(socket_path_curr)
+        prev.connect_unix(socket_path_prev)
 
         size = curr.get_size()
         for offset in range(0, size, block_size):
@@ -676,13 +697,27 @@ def get_dirty_blocks(curr_image, prev_image, block_size=1024*1024):
     finally:
         curr.close()  # must close explicitly
         prev.close()
+        if os.path.exists(socket_path_curr):
+            os.unlink(socket_path_curr)
+        if os.path.exists(socket_path_prev):
+            os.unlink(socket_path_prev)
 
     return dirty_blocks
 
-def get_nbd_socket_path(image):
-    # replace "/" in path with "-" and remove the first letter
-    socket_name = image.replace("/", "-")[1:]
-    socket_path = f"/tmp/{socket_name}.sock"
-    cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", "--fork", f"--socket={socket_path}", image]
-    subprocess.run(cmd, check=True)
-    return f"{socket_path}"
+
+def create_nbd_socket(image):
+    socket_path = f"/tmp/nbd-{os.path.basename(image)}-{uuid.uuid4().hex}.sock"
+    if os.path.exists(socket_path):
+        os.remove(socket_path)
+    cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", image]
+    proc = subprocess.Popen(cmd)
+    wait_for_socket(socket_path)
+    return socket_path, proc
+
+def wait_for_socket(path, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"NBD socket not accepting connections: {path}")

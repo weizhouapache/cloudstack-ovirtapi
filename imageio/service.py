@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_backup_extents_with_context, download_range, CHUNK_SIZE
+from imageio.backup_service import backup_router, get_extents_with_context, get_extents_via_nbd, download_range, CHUNK_SIZE
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -48,39 +48,6 @@ transfers: Dict[str, dict] = {}
 #     "format": "qcow2" | "raw",
 #     "mode": "download" | "upload",
 # }
-
-# =========================
-# Utilities
-# =========================
-
-def parse_single_range(range_header: str, file_size: int) -> Tuple[int, int]:
-    unit, rng = range_header.split("=")
-    start_s, end_s = rng.split("-")
-    start = int(start_s)
-    end = int(end_s) if end_s else file_size - 1
-    if start >= file_size:
-        raise HTTPException(status_code=416, detail=f"Range Not Satisfiable: start {start} is greater than the file size {file_size}")
-    end = min(end, file_size - 1)
-    return start, end
-
-def parse_multi_range(range_header: str) -> List[Tuple[int, int]]:
-    unit, ranges = range_header.split("=")
-    result = []
-    for part in ranges.split(","):
-        s, e = part.split("-")
-        result.append((int(s), int(e)))
-    return result
-
-def iter_file(f, length):
-    remaining = length
-    while remaining > 0:
-        size = min(CHUNK_SIZE, remaining)
-        data = f.read(size)
-        if not data:
-            break
-        remaining -= len(data)
-        yield data
-
 
 # =========================
 # ImageIO Service (54322)
@@ -207,7 +174,7 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
 
     if not backup_id and t["format"] == "qcow2":
         # full backup of volume for qcow2
-        extents = get_backup_extents_with_context(t["file_path"], context)
+        extents = get_extents_via_nbd(t["file_path"], context)
         extents_response = {"extents": extents}
         return create_response(request, "extents", extents_response)
 
