@@ -540,7 +540,9 @@ def download_range(vm: str, diskpath: str, request: Request):
             while remaining > 0:
                 chunk_len = min(CHUNK_SIZE, remaining)
                 data = conn.pread(chunk_len, offset)
-                yield data
+                if not data:
+                    data = b"\x00" * chunk_len
+                yield bytes(data)
                 offset += chunk_len
                 remaining -= chunk_len
         finally:
