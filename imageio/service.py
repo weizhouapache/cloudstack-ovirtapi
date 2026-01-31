@@ -1,18 +1,17 @@
 import os
 import uuid
 import subprocess
-import logging
 import configparser
 from typing import Dict, List, Tuple
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 import threading
-from imageio.logging import setup_logging
+from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_qcow2_extents, download_range
+from imageio.backup_service import backup_router, get_extents_with_context, get_backup_extents_with_context, download_range
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -208,7 +207,7 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
 
     if not backup_id and t["format"] == "qcow2":
         # full backup of volume for qcow2
-        extents = get_qcow2_extents(t["file_path"], context)
+        extents = get_backup_extents_with_context(t["file_path"], context)
         extents_response = {"extents": extents}
         return create_response(request, "extents", extents_response)
 
@@ -250,7 +249,7 @@ async def upload_transfer(transfer_id: str, request: Request):
         raise HTTPException(404)
 
     file_path = t["file_path"]
-    logger.debug(f"uploading to file {file_path}")
+    logger.info(f"Uploading to file {file_path}")
 
     range_header = request.headers.get("content-range")
     if not range_header:
@@ -298,7 +297,7 @@ async def options_imageio(transfer_id: str, request: Request):
 async def patch_imageio(transfer_id: str, request: Request):
     # get data from request
     data = await request.json()
-    logger.debug(f"patch tranfer {transfer_id} with data: {data}")
+    logger.info(f"Patching tranfer {transfer_id} with data: {data}")
 
     return Response(status_code=200)
 

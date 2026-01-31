@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO
 from imageio.utils import check_internal_auth
+from imageio.logging_imageio import logger
 
 
 # Import the internal token
@@ -39,6 +40,10 @@ class BackupResponse(BaseModel):
     new_checkpoint_id: str
     disks: dict
 
+class BackupStatusResponse(BaseModel):
+    vm_name: str
+    backup_in_progress: bool
+    job_info: str
 
 # =============================
 # Metadata helpers
@@ -219,23 +224,51 @@ def create_incremental_from_extents(current, previous, out, extents):
 
 
 # =============================
-# Extent discovery (unified)
+# Internal method: Check backup job status
 # =============================
 
-def get_backup_extents(image):
-    cmd = ["qemu-img", "map", "-U", "--output=json", image]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=True, text=True)
-    layout = json.loads(proc.stdout)
+def check_backup_job_status(vm_name: str) -> dict:
+    """
+    Check if a backup job is currently running for the given VM.
+    Uses virsh domjobinfo command to determine backup status.
+    Returns a dictionary with backup status information.
+    """
+    try:
+        # Run virsh domjobinfo command
+        result = subprocess.run(
+            ["virsh", "domjobinfo", vm_name],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        
+        # If command fails or returns empty output, no backup job is running
+        if result.returncode != 0 or not result.stdout.strip():
+            return {
+                "backup_in_progress": False,
+                "job_info": ""
+            }
+        
+        job_info = result.stdout.strip()
 
-    extents = []
-    for e in layout:
-        if e.get("data", False):
-            extents.append({
-                "start": e["start"],
-                "length": e["length"]
-            })
-    return extents
+        # Loop through lines and check for both keywords
+        backup_in_progress = False
+        for line in job_info.split('\n'):
+            if "Operation:" in line and "Backup" in line:
+                backup_in_progress = True
+                break
 
+        return {
+            "backup_in_progress": backup_in_progress,
+            "job_info": job_info
+        }
+        
+    except Exception as e:
+        # If any error occurs, assume no backup job is running
+        return {
+            "backup_in_progress": False,
+            "job_info": f"Error checking backup status: {str(e)}"
+        }
 
 # =============================
 # FastAPI: Backup endpoint
@@ -353,45 +386,6 @@ def backup_vm(vm: str, request: Request):
             disks=result
         )
 
-# =========================
-# Internal method: Get extents for qcow2 file, used by backup_service.py
-# =========================
-
-def get_qcow2_extents(file_path: str, context: str = "zero"):
-    """
-    Uses: qemu-img map -U --output=json
-    Returns list of (start, length) for allocated clusters.
-    """
-    cmd = ["qemu-img", "map", "-U", "--output=json", file_path]
-    out = subprocess.check_output(cmd)
-    data = json.loads(out)
-
-    extents = []
-    for e in data:
-        start = e["start"]
-        length = e["length"]
-        is_data = e.get("data", False)
-        is_zero = e.get("zero", False)
-
-        if context == "dirty":
-            # For incremental backup dirty context
-            # In real implementation, this would read from dirty bitmap
-            # For now, we'll indicate data areas as potentially dirty
-            extents.append({
-                "start": start,
-                "length": length,
-                "dirty": is_data,  # Simplified - in real scenario, this comes from dirty bitmap
-                "zero": is_zero
-            })
-        else:  # default to "zero" context
-            extents.append({
-                "start": start,
-                "length": length,
-                "zero": is_zero,
-                "hole": not is_data
-            })
-    return extents
-
 # =============================
 # Internal method: Get extents for backup image, used by service.py
 # =============================
@@ -418,6 +412,10 @@ def get_extents_with_context(vm: str, diskpath: str, request: Request, context: 
 
     return extents
 
+# =========================
+# Internal method: Get extents for qcow2 file, used by backup_service.py
+# =========================
+
 def get_backup_extents_with_context(image, context: str = "zero"):
     cmd = ["qemu-img", "map", "-U", "--output=json", image]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=True, text=True)
@@ -429,24 +427,33 @@ def get_backup_extents_with_context(image, context: str = "zero"):
         length = e["length"]
         is_data = e.get("data", False)
         is_zero = e.get("zero", False)
+        is_present = e.get("present", False)
+        depth = e.get("depth", 0)
+
+        # True if data is actually readable for this backup
+        is_backing_data = depth > 0  # block exists in backing file
+        is_top_data = is_present and is_data
+        is_readable = is_top_data or is_backing_data
 
         if context == "dirty":
-            # For incremental backup dirty context
-            # In real implementation, this would read from dirty bitmap
-            # For now, we'll indicate data areas as potentially dirty
+            # Incremental backup: mark modified blocks
             extents.append({
                 "start": start,
                 "length": length,
-                "dirty": is_data,  # Simplified - in real scenario, this comes from dirty bitmap
-                "zero": is_zero
+                "dirty": is_readable,  # should download if true
+                "zero": is_zero        # can be written efficiently as zeroes
             })
-        else:  # default to "zero" context
+        else:
+            # Full backup: mark zero/hole blocks
             extents.append({
                 "start": start,
                 "length": length,
                 "zero": is_zero,
-                "hole": not is_data
+                "hole": False  # always False
             })
+
+    logger.info(f"Extents of {image}: {extents}")
+
     return extents
 
 # =============================
@@ -523,4 +530,28 @@ def download_range(vm: str, diskpath: str, request: Request):
         media_type="application/octet-stream",
         headers=headers,
         status_code=206
+    )
+
+# =============================
+# Internal API endpoint: Check backup job status
+# =============================
+
+@backup_router.get("/internal/backup/{vm}/status", response_model=BackupStatusResponse)
+def get_backup_status(vm: str, request: Request):
+    """
+    Internal API endpoint to check the status of backup job for a VM.
+    Uses virsh domjobinfo command to determine if backup is in progress.
+    Returns backup status information.
+    """
+    # Check internal authentication
+    if not check_internal_auth(request, INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+    
+    # Check backup job status
+    status_info = check_backup_job_status(vm)
+    
+    return BackupStatusResponse(
+        vm_name=vm,
+        backup_in_progress=status_info["backup_in_progress"],
+        job_info=status_info["job_info"]
     )

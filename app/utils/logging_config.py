@@ -57,5 +57,7 @@ def setup_logging():
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("multipart").setLevel(logging.WARNING)
 
+    logger.info("Logging configured with level %s and file %s", level_str, log_file)
+
     return logger
 

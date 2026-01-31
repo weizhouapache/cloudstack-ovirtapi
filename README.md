@@ -192,7 +192,7 @@ On Ubuntu systems, you can alternatively install the required packages using apt
 
 ```
 sudo apt update
-sudo apt install python3-fastapi python3-uvicorn python3-httpx python3-lxml python3-cryptography python3-multipart
+sudo apt install python3-fastapi python3-uvicorn python3-httpx python3-lxml python3-cryptography python3-multipart python3-libvirt
 ```
 
 ## Build and run

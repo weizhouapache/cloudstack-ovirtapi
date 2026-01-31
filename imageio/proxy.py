@@ -1,14 +1,13 @@
 import os
 import uuid
 import subprocess
-import logging
 import configparser
 from typing import Dict, List, Tuple
 from fastapi import FastAPI, APIRouter, Request, Response, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 import threading
-from imageio.logging import setup_logging
+from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import PROXY, SSL, LOGGING

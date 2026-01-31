@@ -15,7 +15,7 @@ def create_backup(vm_id, vm_name, backup_id, to_checkpoint_id, target_host_ip):
         "vm_name": vm_name,
         "to_checkpoint_id": to_checkpoint_id,
         "target_host_ip": target_host_ip,
-        "phase": "ready",
+        "phase": "starting",
         "created": int(time.time())
     }
 

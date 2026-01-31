@@ -104,9 +104,45 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
     if not backup:
         return Response(status_code=404)
 
+    if backup["phase"] == "ready":
+        payload = {
+            "id": backup_id,
+            "phase": "ready",
+            "to_checkpoint_id": backup["to_checkpoint_id"],
+            "vm": {"id": vm_id},
+            "snapshot": {"id": DUMMY_VM_SNAPSHOT_ID},
+        }
+        return create_response(request, "backup", payload)        
+ 
+    # Call internal imageio endpoint to get backup status
+    target_host_ip = backup["target_host_ip"]
+    vm_name = backup["vm_name"]
+    
+    status_url = f"https://{target_host_ip}:54322/images/internal/backup/{vm_name}/status"
+    
+    async with httpx.AsyncClient(verify=False) as client:
+        headers = {"Authorization": INTERNAL_TOKEN}
+        response = await client.get(status_url, headers=headers)
+        
+        if response.status_code == 200:
+            status_result = response.json()
+            backup_in_progress = status_result.get("backup_in_progress", False)
+            
+            # Update phase based on backup status
+            if backup_in_progress:
+                current_phase = "initializing"
+            else:
+                current_phase = "ready"
+        else:
+            # If we can't get status, keep current phase
+            current_phase = backup["phase"]
+
+    if current_phase != backup["phase"]:
+        update_backup(backup_id, {"phase": current_phase})
+
     payload = {
         "id": backup_id,
-        "phase": backup["phase"],
+        "phase": current_phase,
         "to_checkpoint_id": backup["to_checkpoint_id"],
         "vm": {"id": vm_id},
         "snapshot": {"id": DUMMY_VM_SNAPSHOT_ID},

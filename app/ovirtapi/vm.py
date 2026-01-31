@@ -1190,7 +1190,8 @@ async def create_vm(request: Request):
 
         # Extract VM parameters from the request
         vm_name = vm_params.get("name", "new-vm")
-        vm_description = vm_params.get("description", "Created via API")
+        vm_display_name = vm_params.get("display_name", "Created via oVirtAPI")
+        vm_description = f"{vm_name} {vm_display_name}"
         vm_memory = vm_params.get("memory", 1073741824)  # Default 1GB
         vm_stateless = vm_params.get("stateless", False)
         vm_type = vm_params.get("type", "server")

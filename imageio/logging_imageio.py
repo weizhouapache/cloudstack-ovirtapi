@@ -3,6 +3,8 @@ import logging.handlers
 import os
 from imageio.config import config
 
+logger = logging.getLogger()
+
 def setup_logging():
     """Configure logging with level and file from config.ini"""
     try:
@@ -21,7 +23,6 @@ def setup_logging():
         os.makedirs(log_dir, exist_ok=True)
 
     # Configure root logger
-    logger = logging.getLogger()
     logger.setLevel(level)
 
     # Remove existing handlers
@@ -55,6 +56,8 @@ def setup_logging():
     # Suppress httpcore and multipart logging
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("multipart").setLevel(logging.WARNING)
+
+    logger.info("Logging configured with level %s and file %s", level_str, log_file)
 
     return logger
 

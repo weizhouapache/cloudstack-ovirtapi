@@ -41,6 +41,9 @@ api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
 app.include_router(ovirtapi_router, prefix=api_prefix)
 logger.info(f"API Router included with prefix: {api_prefix}")
 
+for route in app.routes:
+    logger.info(f"{route.path}  ->  {route.methods}")
+
 # Add middlewares for main API
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(oVirtAPIAuthMiddleware)
