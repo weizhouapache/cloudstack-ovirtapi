@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_extents_via_nbd, download_range, CHUNK_SIZE
+from imageio.backup_service import backup_router, get_extents_with_context, get_extents_via_nbd, download_range, get_virtual_size, CHUNK_SIZE
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -183,16 +183,6 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
 
 
 # ---- DOWNLOAD with Range support ----
-
-def get_virtual_size(file_path):
-    output = subprocess.check_output(["qemu-img", "info", "-U", file_path])
-    output = output.decode("utf-8")
-    lines = output.split("\n")
-    for line in lines:
-        if line.startswith("virtual size"):
-            size = line.split()[4].split("(")[1]
-            return int(size)
-    raise ValueError(f"Could not find virtual size for {file_path}")
 
 @imageio_router.get("/{transfer_id}")
 def download_transfer(transfer_id: str, request: Request):

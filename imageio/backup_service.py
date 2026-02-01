@@ -29,7 +29,7 @@ META_ROOT = "/backup/meta"
 CLUSTER_SIZE = 65536
 KEEP_CHECKPOINTS = 1
 
-CHUNK_SIZE=1024*1024
+CHUNK_SIZE = 2 * 1024 * 1024
 
 backup_router = APIRouter()
 
@@ -525,7 +525,7 @@ def download_range(vm: str, diskpath: str, request: Request):
             if os.path.exists(socket_path):
                 os.unlink(socket_path)
 
-    file_size = os.path.getsize(image)
+    file_size = get_virtual_size(image)
     range_header = request.headers.get("range")
 
     if not range_header:
@@ -650,6 +650,8 @@ def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
         if os.path.exists(socket_path):
             os.unlink(socket_path)
 
+    logger.info(f"Extents of {image} before merging: {extents}")
+
     # Merge adjacent extents with same flags to reduce number of extents
     merged = []
     for e in extents:
@@ -704,6 +706,9 @@ def get_dirty_blocks(curr_image, prev_image, block_size=1024*1024):
 
     return dirty_blocks
 
+# =============================
+# Internal method: Create NBD socket and wait for connection
+# =============================
 
 def create_nbd_socket(image):
     socket_path = f"/tmp/nbd-{os.path.basename(image)}-{uuid.uuid4().hex}.sock"
@@ -721,3 +726,16 @@ def wait_for_socket(path, timeout=5.0):
             return
         time.sleep(0.05)
     raise RuntimeError(f"NBD socket not accepting connections: {path}")
+
+# =============================
+# Internal method: Get virtual size of qcow2 file
+# =============================
+def get_virtual_size(file_path):
+    output = subprocess.check_output(["qemu-img", "info", "-U", file_path])
+    output = output.decode("utf-8")
+    lines = output.split("\n")
+    for line in lines:
+        if line.startswith("virtual size"):
+            size = line.split()[4].split("(")[1]
+            return int(size)
+    raise ValueError(f"Could not find virtual size for {file_path}")
