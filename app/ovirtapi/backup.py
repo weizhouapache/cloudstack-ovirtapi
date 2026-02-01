@@ -104,15 +104,15 @@ async def get_backup_status(vm_id: str, backup_id: str, request: Request):
     if not backup:
         return Response(status_code=404)
 
-    if backup["phase"] == "ready":
+    if backup["phase"] in ["ready", "succeeded", "failed"]:
         payload = {
             "id": backup_id,
-            "phase": "ready",
+            "phase": backup["phase"],
             "to_checkpoint_id": backup["to_checkpoint_id"],
             "vm": {"id": vm_id},
             "snapshot": {"id": DUMMY_VM_SNAPSHOT_ID},
         }
-        return create_response(request, "backup", payload)        
+        return create_response(request, "backup", payload)
  
     # Call internal imageio endpoint to get backup status
     target_host_ip = backup["target_host_ip"]
@@ -156,16 +156,8 @@ async def finalize_backup(vm_id: str, backup_id: str, request: Request):
     if not backup:
         return Response(status_code=404)
 
-    # update backup from memory
-    new_backup = {
-        "vm_id": backup["vm_id"],
-        "vm_name": backup["vm_name"],
-        "to_checkpoint_id": backup["to_checkpoint_id"],
-        "target_host_ip": backup["target_host_ip"],
-        "phase": "succeeded",
-        "created": backup["created"],
-    }
-    update_backup(backup_id, new_backup)
+    # update backup phase in memory
+    update_backup(backup_id, {"phase": "succeeded"})
 
     payload = {
         "status": "complete",
