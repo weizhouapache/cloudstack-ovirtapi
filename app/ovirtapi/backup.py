@@ -55,11 +55,11 @@ async def create_backup_endpoint(vm_id: str, request: Request):
     # Please note that the Authorization header must be set to the internal token
     backup_url = f"https://{target_host_ip}:54322/images/internal/backup/{vm_name}"
     
-    checkpoint_id = backup_params.get("checkpoint_id", "")
+    checkpoint_id = backup_params.get("from_checkpoint_id", "")
     async with httpx.AsyncClient(verify=False) as client:
         headers = {
             "Authorization": INTERNAL_TOKEN,
-            "checkpoint-id": checkpoint_id
+            "from_checkpoint_id": checkpoint_id
         }
         response = await client.post(
             backup_url,

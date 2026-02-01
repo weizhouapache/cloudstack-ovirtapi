@@ -122,28 +122,18 @@ def run_full_backup(vm, dom):
 
     # Generate backup XML configuration for full backup
     backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir)
+
     # For full backup, we'll use a specific checkpoint name pattern
     checkpoint_name = f"full-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
 
-    # Execute virsh backup-begin command for full backup
-    with open("/tmp/backup.xml", "w") as f:
-        f.write(backup_xml)
-    with open("/tmp/checkpoint.xml", "w") as f:
-        f.write(checkpoint_xml)
-
-    cmd = [
-        "virsh", "backup-begin", vm,
-        "--backupxml", "/tmp/backup.xml",
-        "--checkpointxml", "/tmp/checkpoint.xml"
-    ]
-    subprocess.run(cmd, check=True)
+    run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml)
 
     # Update result with target paths from backup XML
     for disk, path in targets.items():
         result[disk] = path
 
-    return result
+    return result, checkpoint_name
 
 
 # =============================
@@ -165,31 +155,36 @@ def generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id=None):
 
     targets = {}
 
+    backup_type = "incremental" if checkpoint_id else "full"
+
     for disk in disk_paths.keys():
-        inc_path = os.path.join(vm_dir, f"{disk}-inc-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
+        file_path = os.path.join(vm_dir, f"{disk}-{backup_type}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
         d = ET.SubElement(disks_elem, "disk", {"name": disk, "type": "file"})
-        ET.SubElement(d, "target", {"file": inc_path})
-        targets[disk] = inc_path
+        ET.SubElement(d, "target", {"file": file_path})
+        targets[disk] = file_path
 
     return ET.tostring(root).decode(), targets
 
 
-def generate_checkpoint_xml():
-    name = f"backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    xml = f"<domaincheckpoint><name>{name}</name></domaincheckpoint>"
-    return name, xml
+def run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml):
+    vm_dir = os.path.join(BACKUP_ROOT, vm)
+    os.makedirs(vm_dir, exist_ok=True)
 
+    # Create backup.xml and checkpoint.xml in vm_dir
+    backup_xml_file = os.path.join(vm_dir, f"{checkpoint_name}-backup.xml")
+    checkpont_xml_file = os.path.join(vm_dir, f"{checkpoint_name}-checkpoint.xml")
 
-def run_virsh_backup_begin(vm, backup_xml, checkpoint_xml):
-    with open("/tmp/backup.xml", "w") as f:
+    with open(backup_xml_file, "w") as f:
         f.write(backup_xml)
-    with open("/tmp/checkpoint.xml", "w") as f:
+    with open(checkpont_xml_file, "w") as f:
         f.write(checkpoint_xml)
 
+
+    # Execute virsh backup-begin command for full or incremental backup
     cmd = [
         "virsh", "backup-begin", vm,
-        "--backupxml", "/tmp/backup.xml",
-        "--checkpointxml", "/tmp/checkpoint.xml"
+        "--backupxml", backup_xml_file,
+        "--checkpointxml", checkpont_xml_file
     ]
     subprocess.run(cmd, check=True)
 
@@ -284,8 +279,8 @@ def backup_vm(vm: str, request: Request):
     if not check_internal_auth(request, INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
         
-    # Get checkpoint_id from headers
-    checkpoint_id = request.headers.get("checkpoint-id")
+    # Get from_checkpoint_id from headers
+    checkpoint_id = request.headers.get("from_checkpoint_id")
         
     meta = load_meta(vm)
     conn, dom = get_vm(vm)
@@ -301,7 +296,7 @@ def backup_vm(vm: str, request: Request):
     # FULL BACKUP
     # -------------------------
     if not checkpoint_id:
-        full_images = run_full_backup(vm, dom)
+        full_images, checkpoint_name = run_full_backup(vm, dom)
 
         meta["mode"] = "cbt" if state == "running" else "image-diff"
         meta["last_checkpoint"] = None
@@ -314,11 +309,8 @@ def backup_vm(vm: str, request: Request):
             }
 
         # Create initial checkpoint if running
-        new_cp = None
         if state == "running":
-            new_cp, cp_xml = generate_checkpoint_xml()
-            dom.checkpointCreateXML(cp_xml, 0)
-            meta["last_checkpoint"] = new_cp
+            meta["last_checkpoint"] = checkpoint_name
 
         save_meta(vm, meta)
         conn.close()
@@ -327,7 +319,7 @@ def backup_vm(vm: str, request: Request):
             vm_name=vm,
             mode="full",
             backup_id=backup_id,
-            new_checkpoint_id=new_cp or "none",
+            new_checkpoint_id=checkpoint_name or "none",
             disks=full_images
         )
 
@@ -346,9 +338,11 @@ def backup_vm(vm: str, request: Request):
         # ---- Running VM: virsh backup-begin ----
         if state == "running":
             backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir)
-            new_cp, cp_xml = generate_checkpoint_xml()
 
-            run_virsh_backup_begin(vm, backup_xml, cp_xml)
+            checkpoint_name = f"incremental-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            checkpoint_xml = f"<domaincheckpoint><name>{name}</name></domaincheckpoint>"
+
+            run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml)
 
             for disk, path in targets.items():
                 meta["disks"][disk] = {
@@ -358,7 +352,7 @@ def backup_vm(vm: str, request: Request):
                 result[disk] = path
 
             meta["mode"] = "cbt"
-            meta["last_checkpoint"] = new_cp
+            meta["last_checkpoint"] = checkpoint_name
 
         # ---- Stopped VM: image-diff ----
         else:
