@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_with_context, get_extents_via_nbd, download_range, get_virtual_size, CHUNK_SIZE, finalize_backup_vm
+from imageio.backup_service import backup_router, get_extents_for_backup, download_range, get_virtual_size, CHUNK_SIZE, finalize_backup_vm
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -171,9 +171,9 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
     volume_id = t.get("volume_id")
     backup_id = t.get("backup_id")
 
-    if not backup_id and t["format"] == "raw":
-        # full backup of volume for raw
-        size = os.path.getsize(t["file_path"])
+    if not backup_id:
+        # full download of the volume
+        size = get_virtual_size(t["file_path"])
         # default to zero context
         extents_response = {
             "extents": [
@@ -182,14 +182,8 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
         }
         return create_response(request, "extents", extents_response)
 
-    if not backup_id and t["format"] == "qcow2":
-        # full backup of volume for qcow2
-        extents = get_extents_via_nbd(t["file_path"], context)
-        extents_response = {"extents": extents}
-        return create_response(request, "extents", extents_response)
-
     # the rest is for backups
-    return get_extents_with_context(vm_name, t["file_path"], request, context)
+    return get_extents_for_backup(vm_name, t["file_path"], request, context)
 
 
 # ---- DOWNLOAD with Range support ----

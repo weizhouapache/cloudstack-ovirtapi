@@ -306,7 +306,7 @@ def backup_vm(vm: str, request: Request):
 
         for disk, path in full_images.items():
             meta["disks"][disk] = {
-                "last_backup": path,                # the full backup path, will merge into the VM in the final step
+                "last_backup": path,                # the full backup path, will be removed when finalize the backup
                 "file_path": disk_paths.get(disk),  # the original path
             }
 
@@ -392,7 +392,7 @@ def backup_vm(vm: str, request: Request):
 # Internal method: Get extents for backup image, used by service.py
 # =============================
 
-def get_extents_with_context(vm: str, diskpath: str, request: Request, context: str = "zero"):
+def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: str = "zero"):
 
     meta = load_meta(vm)
 
@@ -410,62 +410,20 @@ def get_extents_with_context(vm: str, diskpath: str, request: Request, context: 
     if not os.path.exists(image):
         raise HTTPException(status_code=404, detail="Backup image not found")
 
-    # extents = get_backup_extents_with_context(image, context)
+    if context == "zero":
+        # Full backup
+        size = get_virtual_size(image)
+        # default to zero context
+        return [
+                {"start": 0, "length": size, "zero": False, "hole": False}
+            ]
 
     if context == "dirty":
         # Incremental backup
-        # TODO: save and get the file path of the previous backup here
         dirty_blocks = get_dirty_blocks(image, meta["disks"][disk_key]["last_backup"])  # offsets of changed blocks
-        extents = get_extents_via_nbd(image, context="dirty", dirty_blocks=dirty_blocks)
-    else:
-        # Full backup
-        extents = get_extents_via_nbd(image, context)
+        return get_extents_via_nbd(image, context="dirty", dirty_blocks=dirty_blocks)
 
-    return extents
-
-# =========================
-# Internal method: Get extents for qcow2 file, used by backup_service.py
-# =========================
-
-def get_backup_extents_with_context(image, context: str = "zero"):
-    cmd = ["qemu-img", "map", "-U", "--output=json", image]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, check=True, text=True)
-    layout = json.loads(proc.stdout)
-
-    extents = []
-    for e in layout:
-        start = e["start"]
-        length = e["length"]
-        is_data = e.get("data", False)
-        is_zero = e.get("zero", False)
-        is_present = e.get("present", False)
-        depth = e.get("depth", 0)
-
-        # True if data is actually readable for this backup
-        is_backing_data = depth > 0  # block exists in backing file
-        is_top_data = is_present and is_data
-        is_readable = is_top_data or is_backing_data
-
-        if context == "dirty":
-            # Incremental backup: mark modified blocks
-            extents.append({
-                "start": start,
-                "length": length,
-                "dirty": is_readable,  # should download if true
-                "zero": is_zero        # can be written efficiently as zeroes
-            })
-        else:
-            # Full backup: mark zero/hole blocks
-            extents.append({
-                "start": start,
-                "length": length,
-                "zero": is_zero,
-                "hole": False  # always False
-            })
-
-    logger.info(f"Extents of {image}: {extents}")
-
-    return extents
+    raise HTTPException(status_code=400, detail="Invalid context")
 
 # =============================
 # Internal method: Range download, used by service.py
