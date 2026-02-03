@@ -156,6 +156,17 @@ async def finalize_backup(vm_id: str, backup_id: str, request: Request):
     if not backup:
         return Response(status_code=404)
 
+    # ask the backup service to finalize the backup
+    target_host_ip = backup["target_host_ip"]
+    vm_name = backup["vm_name"]
+
+    finalize_url = f"https://{target_host_ip}:54322/images/internal/backup/{vm_name}/finalize"
+    async with httpx.AsyncClient(verify=False) as client:
+        headers = {"Authorization": INTERNAL_TOKEN}
+        response = await client.post(finalize_url, headers=headers)
+        if response.status_code != 200:
+            raise HTTPException(status_code=response.status_code, detail=f"Failed to finalize backup: {response.text}")
+
     # update backup phase in memory
     update_backup(backup_id, {"phase": "succeeded"})
 

@@ -63,6 +63,7 @@ def load_meta(vm):
         return {
             "mode": None,
             "last_checkpoint": None,
+            "previous_checkpoint": None,
             "cluster_size": CLUSTER_SIZE,
             "disks": {}
         }
@@ -299,13 +300,14 @@ def backup_vm(vm: str, request: Request):
         full_images, checkpoint_name = run_full_backup(vm, dom)
 
         meta["mode"] = "cbt" if state == "running" else "image-diff"
+        meta["previous_checkpoint"] = meta["last_checkpoint"]
         meta["last_checkpoint"] = None
         meta["disks"] = {}
 
         for disk, path in full_images.items():
             meta["disks"][disk] = {
-                "last_backup": path,
-                "file_path": disk_paths.get(disk)
+                "last_backup": path,                # the full backup path, will merge into the VM in the final step
+                "file_path": disk_paths.get(disk),  # the original path
             }
 
         # Create initial checkpoint if running
@@ -352,6 +354,7 @@ def backup_vm(vm: str, request: Request):
                 result[disk] = path
 
             meta["mode"] = "cbt"
+            meta["previous_checkpoint"] = meta["last_checkpoint"]
             meta["last_checkpoint"] = checkpoint_name
 
         # ---- Stopped VM: image-diff ----
@@ -370,6 +373,7 @@ def backup_vm(vm: str, request: Request):
                 result[disk] = inc_path
 
             meta["mode"] = "image-diff"
+            meta["previous_checkpoint"] = None      # image-diff does not have a previous checkpoint
             meta["last_checkpoint"] = None
             new_cp = f"{vm}-image-diff-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
@@ -733,3 +737,29 @@ def get_virtual_size(file_path):
             size = line.split()[4].split("(")[1]
             return int(size)
     raise ValueError(f"Could not find virtual size for {file_path}")
+
+# =============================
+# Internal method: Finalize backup - merge backup into VM
+# =============================
+
+def finalize_backup_vm(vm):
+    """
+    Finalize backup by merging the backup file into the original VM disk
+    using virsh blockcommit command.
+    """
+    # Load metadata to get disk information
+    meta = load_meta(vm)
+    previous_checkpoint = meta["previous_checkpoint"]
+
+    # remove previous checkpint by virsh checkpoint-delete
+    if previous_checkpoint:
+        conn, dom = get_vm(vm)
+        state = get_vm_state(dom)
+        if state == "running":
+            try:
+                subprocess.run(["virsh", "checkpoint-delete", vm, previous_checkpoint], check=True)
+            except Exception as e:
+                logger.error(f"Error deleting previous checkpoint: {e}")
+
+        meta["previous_checkpoint"] = None
+        save_meta(vm, meta)
