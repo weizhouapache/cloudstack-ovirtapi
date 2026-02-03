@@ -42,7 +42,6 @@ class BackupResponse(BaseModel):
     mode: str
     backup_id: str
     new_checkpoint_id: str
-    disks: dict
 
 class BackupStatusResponse(BaseModel):
     vm_name: str
@@ -63,6 +62,7 @@ def load_meta(vm):
         return {
             "mode": None,
             "last_checkpoint": None,
+            "previous_mode":   None,
             "previous_checkpoint": None,
             "cluster_size": CLUSTER_SIZE,
             "disks": {}
@@ -85,9 +85,13 @@ def save_meta(vm, meta):
 
 def get_vm(vm):
     conn = libvirt.open(None)
-    dom = conn.lookupByName(vm)
-    return conn, dom
-
+    try:
+        return conn.lookupByName(vm)
+    except libvirt.libvirtError as e:
+        logger.error(f"Error looking up VM {vm}: {e}")
+        return None
+    finally:
+        conn.close()
 
 def get_vm_state(dom):
     state, _ = dom.state()
@@ -114,7 +118,7 @@ def get_disk_paths(dom):
 # Full backup
 # =============================
 
-def run_full_backup(vm, dom):
+def full_backup_running_vm(vm, dom):
     disk_paths = get_disk_paths(dom)
     vm_dir = os.path.join(BACKUP_ROOT, vm)
     os.makedirs(vm_dir, exist_ok=True)
@@ -189,40 +193,6 @@ def run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml):
     ]
     subprocess.run(cmd, check=True)
 
-
-# =============================
-# Stopped VM incremental (image diff)
-# =============================
-
-def get_image_diff_extents(current, previous):
-    cmd = ["qemu-img", "compare", "-f", "qcow2", "-F", "qcow2", "-s", current, previous]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=True)
-
-    extents = []
-    for line in proc.stdout.splitlines():
-        parts = line.strip().split()
-        if len(parts) == 2:
-            extents.append({"offset": int(parts[0]), "length": int(parts[1])})
-    return extents
-
-
-def create_incremental_from_extents(current, previous, out, extents):
-    if os.path.exists(out):
-        os.remove(out)
-
-    for e in extents:
-        cmd = [
-            "qemu-img", "convert",
-            "-f", "qcow2",
-            "-O", "qcow2",
-            "-o", f"cluster_size={CLUSTER_SIZE},backing_file={previous}",
-            "-S", str(e["offset"]),
-            "-s", str(e["length"]),
-            current, out
-        ]
-        subprocess.run(cmd, check=True)
-
-
 # =============================
 # Internal method: Check backup job status
 # =============================
@@ -275,18 +245,30 @@ def check_backup_job_status(vm_name: str) -> dict:
 # =============================
 
 @backup_router.post("/internal/backup/{vm}", response_model=BackupResponse)
-def backup_vm(vm: str, request: Request):
+async def backup_vm(vm: str, request: Request):
     # Check internal authentication
     if not check_internal_auth(request, INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
-        
+
     # Get from_checkpoint_id from headers
     checkpoint_id = request.headers.get("from_checkpoint_id")
-        
+
+    body_bytes = await request.body()
+    body_str = body_bytes.decode("utf-8")
+    payload = json.loads(body_str) if body_str else {}
+
+    volumes = payload["volumes"]
+
     meta = load_meta(vm)
-    conn, dom = get_vm(vm)
-    state = get_vm_state(dom)
-    disk_paths = get_disk_paths(dom)
+    dom = get_vm(vm)
+
+    if dom:
+        state = get_vm_state(dom)
+        disk_paths = get_disk_paths(dom)
+    else:
+        state = "stopped"
+        disk_paths = {}
+
 
     vm_dir = os.path.join(BACKUP_ROOT, vm)
     os.makedirs(vm_dir, exist_ok=True)
@@ -294,19 +276,24 @@ def backup_vm(vm: str, request: Request):
     backup_id = str(uuid.uuid4())
 
     # -------------------------
-    # FULL BACKUP
+    # FULL BACKUP of Running VM
     # -------------------------
-    if not checkpoint_id:
-        full_images, checkpoint_name = run_full_backup(vm, dom)
+    if not checkpoint_id and state == "running":
+        full_images, checkpoint_name = full_backup_running_vm(vm, dom)
 
-        meta["mode"] = "cbt" if state == "running" else "image-diff"
+        meta["previous_mode"] = meta["mode"]
         meta["previous_checkpoint"] = meta["last_checkpoint"]
+        meta["mode"] = "cbt"
         meta["last_checkpoint"] = None
         meta["disks"] = {}
 
+        i = 0
         for disk, path in full_images.items():
-            meta["disks"][disk] = {
-                "last_backup": path,                # the full backup path, will be removed when finalize the backup
+            index = "disk" + str(i)
+            i += 1
+            meta["disks"][index] = {
+                "device_name": disk,
+                "backup_path": path,                # the full backup path, will be removed when finalize the backup
                 "file_path": disk_paths.get(disk),  # the original path
             }
 
@@ -315,14 +302,74 @@ def backup_vm(vm: str, request: Request):
             meta["last_checkpoint"] = checkpoint_name
 
         save_meta(vm, meta)
-        conn.close()
 
         return BackupResponse(
             vm_name=vm,
             mode="full",
             backup_id=backup_id,
             new_checkpoint_id=checkpoint_name or "none",
-            disks=full_images
+        )
+
+    elif not checkpoint_id and state == "stopped":
+        # -------------------------
+        # FULL BACKUP of Stopped VM
+        # -------------------------
+        checkpoint_name = f"bitmap-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+        # Create bitmap on images of stopped VM
+        for volume in volumes:
+            volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+            if os.path.exists(volume_path):
+                # create bitmap using "qemu-img bitmap" command
+                cmd = [
+                    "qemu-img", "bitmap",
+                    "--add",
+                    volume_path,
+                    checkpoint_name
+                ]
+                subprocess.run(cmd, check=True)
+                logger.info(f"Created bitmap for full backup for {volume_path} as {checkpoint_name}")
+
+                if meta["last_checkpoint"]:
+                    try:
+                        # remove last bitmap or checkpoint if exists
+                        cmd = [
+                            "qemu-img", "bitmap",
+                            "--remove",
+                            volume_path,
+                            meta["last_checkpoint"]
+                        ]
+                        subprocess.run(cmd, check=True)
+                        logger.info(f"Removed last bitmap {meta["previous_checkpoint"]} from {volume_path}")
+                    except Exception as e:
+                        logger.error(f"Error removing previous bitmap {meta['previous_checkpoint']} from {volume_path}: {e}")
+
+
+        meta = {
+            "mode": "bitmap",
+            "last_checkpoint": checkpoint_name,
+            "previous_mode": None,
+            "previous_checkpoint": None,        # no previous checkpoint for full backup
+            "cluster_size": CLUSTER_SIZE,
+            "disks": {}
+        }
+
+        i = 0
+        for volume in volumes:
+            volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+            index = "disk" + str(i)
+            i += 1
+            meta["disks"][index] = {
+                "file_path": volume_path
+            }
+
+        save_meta(vm, meta)
+
+        return BackupResponse(
+            vm_name=vm,
+            mode="full",
+            backup_id=backup_id,
+            new_checkpoint_id=checkpoint_name,
         )
 
     # -------------------------
@@ -335,57 +382,82 @@ def backup_vm(vm: str, request: Request):
                 detail=f"Checkpoint mismatch: expected {meta.get('last_checkpoint')}, got {checkpoint_id}"
             )
 
-        result = {}
-
         # ---- Running VM: virsh backup-begin ----
         if state == "running":
-            backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir)
+            if meta.get("last_checkpoint") and meta.get("mode") == "bitmap":
+                # generate checkpoint xml with the bitmap
+                previous_checkpoint_xml = generate_checkpoint_xml_from_bitmap(meta["last_checkpoint"], disk_paths)
+                # run "echo previous_checkpoint_xml | virsh checkpoint-create --xmlfile /dev/stdin --redefine"
+                cmd = ["echo", previous_checkpoint_xml, "|",
+                    "virsh", "checkpoint-create",
+                    "--xmlfile", "/dev/stdin",
+                    "--redefine"
+                ]
+                subprocess.run(cmd, check=True, shell=True)
+                logger.info(f"Created checkpoint {meta['last_checkpoint']} from bitmap")
+
+
+            backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id)
 
             checkpoint_name = f"incremental-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            checkpoint_xml = f"<domaincheckpoint><name>{name}</name></domaincheckpoint>"
+            checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
 
             run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml)
 
+            i = 0
             for disk, path in targets.items():
-                meta["disks"][disk] = {
-                    "last_backup": path,
+                index = "disk" + str(i)
+                i += 1
+                meta["disks"][index] = {
+                    "device_name": disk,
+                    "backup_path": path,
                     "file_path": disk_paths.get(disk)
                 }
-                result[disk] = path
 
-            meta["mode"] = "cbt"
+            meta["previous_mode"] = meta["mode"]
             meta["previous_checkpoint"] = meta["last_checkpoint"]
+            meta["mode"] = "cbt"
             meta["last_checkpoint"] = checkpoint_name
 
-        # ---- Stopped VM: image-diff ----
+        # ---- Stopped VM: bitmap ----
         else:
-            for disk, current in disk_paths.items():
-                previous = meta["disks"][disk]["last_backup"]
-                inc_path = os.path.join(vm_dir, f"{disk}-inc-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
+            checkpoint_name = f"bitmap-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            # disk_paths is empty for stopped VM, use "volumes" instead
+            for volume in volumes:
+                volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+                if os.path.exists(volume_path):
+                    # create new bitmap using "qemu-img bitmap" command
+                    cmd = [
+                        "qemu-img", "bitmap",
+                        "--add",
+                        volume_path,
+                        checkpoint_name
+                    ]
+                    subprocess.run(cmd, check=True)
+                    logger.info(f"Created bitmap for incremental backup for {volume_path} as {checkpoint_name}")
 
-                extents = get_image_diff_extents(current, previous)
-                if not extents:
-                    continue
+            meta["previous_mode"] = meta["mode"]
+            meta["previous_checkpoint"] = meta["last_checkpoint"]
+            meta["mode"] = "bitmap"
+            meta["last_checkpoint"] = checkpoint_name
+            meta["disks"] = {}
 
-                create_incremental_from_extents(current, previous, inc_path, extents)
-
-                meta["disks"][disk]["last_backup"] = inc_path
-                result[disk] = inc_path
-
-            meta["mode"] = "image-diff"
-            meta["previous_checkpoint"] = None      # image-diff does not have a previous checkpoint
-            meta["last_checkpoint"] = None
-            new_cp = f"{vm}-image-diff-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            i = 0
+            for volume in volumes:
+                volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+                index = "disk" + str(i)
+                i += 1
+                meta["disks"][index] = {
+                    "file_path": volume_path
+                }
 
         save_meta(vm, meta)
-        conn.close()
 
         return BackupResponse(
             vm_name=vm,
             mode="incremental",
             backup_id=backup_id,
-            new_checkpoint_id=new_cp,
-            disks=result
+            new_checkpoint_id=checkpoint_name,
         )
 
 # =============================
@@ -396,19 +468,27 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
 
     meta = load_meta(vm)
 
-    # Find the disk by file_path instead of assuming the disk parameter matches the key
-    disk_key = None
-    for k, v in meta["disks"].items():
-        if v.get("file_path") == diskpath:
-            disk_key = k
-            break
+    if meta["mode"] == "cbt":
+        # Find the disk by file_path instead of assuming the disk parameter matches the key
+        disk_key = None
+        for k, v in meta["disks"].items():
+            if v.get("file_path") == diskpath:
+                disk_key = k
+                break
 
-    if not disk_key:
-        raise HTTPException(status_code=404, detail="Disk not found")
+        if not disk_key:
+            raise HTTPException(status_code=404, detail=f"Disk image {diskpath} not found")
 
-    image = meta["disks"][disk_key]["last_backup"]
-    if not os.path.exists(image):
-        raise HTTPException(status_code=404, detail="Backup image not found")
+        image = meta["disks"][disk_key]["backup_path"]
+        if not os.path.exists(image):
+            raise HTTPException(status_code=404, detail=f"Backup image for {diskpath} not found")
+
+    elif meta["mode"] == "bitmap":
+        image = diskpath
+        if not os.path.exists(image):
+            raise HTTPException(status_code=404, detail=f"Disk image {image} not found")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid backup mode")
 
     if context == "zero":
         # Full backup
@@ -420,8 +500,7 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
 
     if context == "dirty":
         # Incremental backup
-        dirty_blocks = get_dirty_blocks(image, meta["disks"][disk_key]["last_backup"])  # offsets of changed blocks
-        return get_extents_via_nbd(image, context="dirty", dirty_blocks=dirty_blocks)
+        return get_extents_via_nbd(image, bitmap_name=meta["previous_checkpoint"])
 
     raise HTTPException(status_code=400, detail="Invalid context")
 
@@ -433,19 +512,27 @@ def download_range(vm: str, diskpath: str, request: Request):
         
     meta = load_meta(vm)
 
-    # Find the disk by file_path instead of assuming the disk parameter matches the key
-    disk_key = None
-    for k, v in meta["disks"].items():
-        if v.get("file_path") == diskpath:
-            disk_key = k
-            break
+    if meta["mode"] == "cbt":
+        # Find the disk by file_path instead of assuming the disk parameter matches the key
+        disk_key = None
+        for k, v in meta["disks"].items():
+            if v.get("file_path") == diskpath:
+                disk_key = k
+                break
 
-    if not disk_key:
-        raise HTTPException(status_code=404, detail="Disk not found")
+        if not disk_key:
+            raise HTTPException(status_code=404, detail=f"Disk image {diskpath} not found")
 
-    image = meta["disks"][disk_key]["last_backup"]
-    if not os.path.exists(image):
-        raise HTTPException(status_code=404, detail="Backup image not found")
+        image = meta["disks"][disk_key]["backup_path"]
+        if not os.path.exists(image):
+            raise HTTPException(status_code=404, detail=f"Backup image for {diskpath} not found")
+
+    elif meta["mode"] == "bitmap":
+        image = diskpath
+        if not os.path.exists(image):
+            raise HTTPException(status_code=404, detail=f"Disk image {image} not found")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid backup mode")
 
     def reader(start, length, image):
         with open(image, "rb") as f:
@@ -556,13 +643,12 @@ def get_backup_status(vm: str, request: Request):
 # =============================
 
 
-def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
+def get_extents_via_nbd(image, bitmap_name, context="dirty"):
     """
     Generate image extents for Veeam from raw or qcow2 image.
 
     :param image: path to qcow2/raw image
     :param context: "zero" for full backup, "dirty" for incremental
-    :param dirty_blocks: optional set of dirty block offsets for incremental
     :return: list of extents dictionaries
     """
 
@@ -573,22 +659,14 @@ def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
         conn.connect_unix(socket_path)
         img_size = conn.get_size()  # virtual size
 
-        offset = 0
-        while offset < img_size:
-            length = min(CHUNK_SIZE, img_size - offset)
-            data = conn.pread(length, offset)  # read virtual bytes
+        if context == "zero" or bitmap_name is None:
+            offset = 0
+            while offset < img_size:
+                length = min(CHUNK_SIZE, img_size - offset)
+                data = conn.pread(length, offset)  # read virtual bytes
 
-            is_zero = all(b == 0 for b in data)
-            if context == "dirty":
-                # dirty block if dirty_blocks is provided and offset is in it
-                dirty = (dirty_blocks is None or offset in dirty_blocks) and not is_zero
-                extents.append({
-                    "start": offset,
-                    "length": length,
-                    "dirty": dirty,
-                    "zero": is_zero
-                })
-            else:  # context == "zero"
+                is_zero = all(b == 0 for b in data)
+
                 # hole detection: if qcow2 and fully zero, consider it a hole
                 hole = is_zero and conn.is_hole(offset, length) if hasattr(conn, "is_hole") else False
                 extents.append({
@@ -597,8 +675,34 @@ def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
                     "zero": is_zero,
                     "hole": hole
                 })
+                offset += length
 
-            offset += length
+        elif context == "dirty":
+            def callback(metacontext, offset, entries, err):
+                if err:
+                    raise RuntimeError(err)
+
+                for e in entries:
+                    length = e["length"]
+
+                    is_allocated = bool(e["flags"] & nbd.STATE_ALLOCATED)
+                    is_zero = not is_allocated
+                    dirty = is_allocated   # bitmap marks dirty regions
+
+                    extents.append({
+                        "start": offset,
+                        "length": length,
+                        "dirty": dirty,
+                        "zero": is_zero
+                    })
+
+            conn.block_status(
+                0,
+                size,
+                nbd.CMD_FLAG_REQ_ONE,
+                callback,
+                bitmap=bitmap_name
+            )
     finally:
         conn.close()  # must close explicitly
         proc.terminate()
@@ -629,38 +733,6 @@ def get_extents_via_nbd(image, context="zero", dirty_blocks=None):
     logger.info(f"Extents of {image}: {merged}")
 
     return merged
-
-# =============================
-# Internal method: Get dirty blocks between two qcow2 images
-# =============================
-
-def get_dirty_blocks(curr_image, prev_image, block_size=1024*1024):
-    dirty_blocks = set()
-    socket_path_curr, proc_curr = create_nbd_socket(image_path)
-    socket_path_prev, proc_prev = create_nbd_socket(prev_image)
-    curr = nbd.NBD()
-    prev = nbd.NBD()
-    try:
-        curr.connect_unix(socket_path_curr)
-        prev.connect_unix(socket_path_prev)
-
-        size = curr.get_size()
-        for offset in range(0, size, block_size):
-            length = min(block_size, size - offset)
-            curr_data = curr.pread(length, offset)
-            prev_data = prev.pread(length, offset)
-            if curr_data != prev_data:
-                dirty_blocks.add(offset)
-
-    finally:
-        curr.close()  # must close explicitly
-        prev.close()
-        if os.path.exists(socket_path_curr):
-            os.unlink(socket_path_curr)
-        if os.path.exists(socket_path_prev):
-            os.unlink(socket_path_prev)
-
-    return dirty_blocks
 
 # =============================
 # Internal method: Create NBD socket and wait for connection
@@ -711,13 +783,55 @@ def finalize_backup_vm(vm):
 
     # remove previous checkpint by virsh checkpoint-delete
     if previous_checkpoint:
-        conn, dom = get_vm(vm)
-        state = get_vm_state(dom)
+        dom = get_vm(vm)
+        state = "stopped"
+        if dom:
+            state = get_vm_state(dom)
+
         if state == "running":
             try:
                 subprocess.run(["virsh", "checkpoint-delete", vm, previous_checkpoint], check=True)
             except Exception as e:
                 logger.error(f"Error deleting previous checkpoint: {e}")
+        elif meta["previous_checkpoint"]:
+            try:
+                # remove last bitmap or checkpoint if exists
+                cmd = [
+                    "qemu-img", "bitmap",
+                    "--remove",
+                    volume_path,
+                    meta["previous_checkpoint"]
+                ]
+                subprocess.run(cmd, check=True)
+                logger.info(f"Removed previous bitmap {meta["previous_checkpoint"]} from {volume_path}")
+            except Exception as e:
+                logger.error(f"Error removing previous bitmap {meta["previous_checkpoint"]} from {volume_path}: {e}")
+
 
         meta["previous_checkpoint"] = None
         save_meta(vm, meta)
+
+# ---- Finalize backup ----
+
+@backup_router.post("/internal/backup/{vm}/finalize")
+def finalize_backup(vm: str, request: Request):
+    # Check internal authentication
+    if not check_internal_auth(request, INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
+
+    return finalize_backup_vm(vm)
+
+# =============================
+# Internal method: Create checkpoint xml from bitmap
+# =============================
+
+def generate_checkpoint_xml_from_bitmap(vm, last_checkpoint, disk_paths):
+    # generate checkpoint xml like below
+    checkpoint_xml = f"<domaincheckpoint><name>{last_checkpoint}</name><disks>"
+    for disk in disk_paths.keys():
+        checkpoint_xml += f"<disk name='{disk}'><bitmap name='{last_checkpoint}'/></disk>"
+    checkpoint_xml += "</disks></domaincheckpoint>"
+
+    logger.debug(f"checkpoint xml for {vm}: {checkpoint_xml}")
+
+    return checkpoint_xml

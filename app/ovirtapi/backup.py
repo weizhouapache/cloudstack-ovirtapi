@@ -51,6 +51,21 @@ async def create_backup_endpoint(vm_id: str, request: Request):
 
     target_host_ip = target_host.get("ipaddress")
 
+    # Get volumes of the VM and order by deviceid
+    volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
+    volumes = volumes_data["listvolumesresponse"].get("volume", [])
+    sorted_volumes = sorted(volumes, key=lambda x: x["deviceid"])
+
+    payload_volumes = {
+        "volumes": [
+            {"id": vol["id"],
+             "name": vol.get("name"),
+             "storageid": vol["storageid"],
+             "path": vol["path"]
+            }
+         for vol in sorted_volumes]
+    }
+
     # 3. Get CloudStack checkpoints via POST request to https://<hostip>/images/internal/backup/{vm}
     # Please note that the Authorization header must be set to the internal token
     backup_url = f"https://{target_host_ip}:54322/images/internal/backup/{vm_name}"
@@ -63,6 +78,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
         }
         response = await client.post(
             backup_url,
+            json=payload_volumes,
             headers=headers
         )
         
@@ -78,7 +94,7 @@ async def create_backup_endpoint(vm_id: str, request: Request):
     # save backup info
     create_backup(vm_id, vm_name, backup_id, new_checkpoint_id, target_host_ip)
     
-    payload = {
+    backup_info = {
         "id": backup_id,
         "to_checkpoint_id": new_checkpoint_id,
         "phase": "starting",
@@ -89,9 +105,9 @@ async def create_backup_endpoint(vm_id: str, request: Request):
     }
 
     if checkpoint_id:
-        payload["from_checkpoint_id"] = checkpoint_id
+        backup_info["from_checkpoint_id"] = checkpoint_id
 
-    return create_response(request, "backup", payload)
+    return create_response(request, "backup", backup_info)
 
 @router.get("/vms/{vm_id}/backups")
 async def list_backups(vm_id: str, request: Request):

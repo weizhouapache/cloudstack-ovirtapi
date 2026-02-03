@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_for_backup, download_range, get_virtual_size, CHUNK_SIZE, finalize_backup_vm
+from imageio.backup_service import backup_router, get_extents_for_backup, download_range, get_virtual_size, CHUNK_SIZE
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -149,16 +149,6 @@ def create_upload_transfer(payload: dict, request: Request):
         "transfer_url": f"https://{bind_ip}:54322/images/{transfer_id}",
     }
 
-# ---- Finalize backup ----
-
-@imageio_router.post("/internal/backup/{vm}/finalize")
-def finalize_backup(vm: str, request: Request):
-    # Check internal authentication
-    if not check_internal_auth(request, INTERNAL_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
-
-    return finalize_backup_vm(vm)
-
 # ---- EXTENTS endpoint ----
 
 @imageio_router.get("/{transfer_id}/extents")
@@ -171,7 +161,7 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
     volume_id = t.get("volume_id")
     backup_id = t.get("backup_id")
 
-    if not backup_id:
+    if not backup_id or t["format"] == "raw":
         # full download of the volume
         size = get_virtual_size(t["file_path"])
         # default to zero context
