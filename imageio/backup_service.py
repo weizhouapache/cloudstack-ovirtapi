@@ -492,15 +492,11 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
 
     if context == "zero":
         # Full backup
-        size = get_virtual_size(image)
-        # default to zero context
-        return [
-                {"start": 0, "length": size, "zero": False, "hole": False}
-            ]
+        return get_extents_via_nbd(image, bitmap_name=None, context = "zero")
 
     if context == "dirty":
         # Incremental backup
-        return get_extents_via_nbd(image, bitmap_name=meta["previous_checkpoint"])
+        return get_extents_via_nbd(image, bitmap_name=meta["previous_checkpoint"], context = "dirty")
 
     raise HTTPException(status_code=400, detail="Invalid context")
 

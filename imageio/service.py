@@ -161,7 +161,7 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
     volume_id = t.get("volume_id")
     backup_id = t.get("backup_id")
 
-    if not backup_id or t["format"] == "raw":
+    if not backup_id or t["format"] != "qcow2":
         # full download of the volume
         size = get_virtual_size(t["file_path"])
         # default to zero context
