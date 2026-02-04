@@ -768,7 +768,7 @@ def get_virtual_size(file_path):
 # Internal method: Finalize backup - merge backup into VM
 # =============================
 
-def finalize_backup_vm(vm):
+def finalize_backup_vm(vm, volumes):
     """
     Finalize backup by merging the backup file into the original VM disk
     using virsh blockcommit command.
@@ -789,19 +789,21 @@ def finalize_backup_vm(vm):
                 subprocess.run(["virsh", "checkpoint-delete", vm, previous_checkpoint], check=True)
             except Exception as e:
                 logger.error(f"Error deleting previous checkpoint: {e}")
-        elif meta["previous_checkpoint"]:
-            try:
-                # remove last bitmap or checkpoint if exists
-                cmd = [
-                    "qemu-img", "bitmap",
-                    "--remove",
-                    volume_path,
-                    meta["previous_checkpoint"]
-                ]
-                subprocess.run(cmd, check=True)
-                logger.info(f"Removed previous bitmap {meta["previous_checkpoint"]} from {volume_path}")
-            except Exception as e:
-                logger.error(f"Error removing previous bitmap {meta["previous_checkpoint"]} from {volume_path}: {e}")
+        elif meta["previous_checkpoint"] and volumes:
+            for volume in volumes:
+                try:
+                    volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+                    # remove last bitmap or checkpoint if exists
+                    cmd = [
+                        "qemu-img", "bitmap",
+                        "--remove",
+                        volume_path,
+                        meta["previous_checkpoint"]
+                    ]
+                    subprocess.run(cmd, check=True)
+                    logger.info(f"Removed previous bitmap {meta["previous_checkpoint"]} from {volume_path}")
+                except Exception as e:
+                    logger.error(f"Error removing previous bitmap {meta["previous_checkpoint"]} from {volume_path}: {e}")
 
 
         meta["previous_checkpoint"] = None
@@ -815,7 +817,13 @@ def finalize_backup(vm: str, request: Request):
     if not check_internal_auth(request, INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
 
-    return finalize_backup_vm(vm)
+    body_bytes = await request.body()
+    body_str = body_bytes.decode("utf-8")
+    payload = json.loads(body_str) if body_str else {}
+
+    volumes = payload["volumes"]
+
+    return finalize_backup_vm(vm, volumes)
 
 # =============================
 # Internal method: Create checkpoint xml from bitmap

@@ -176,10 +176,25 @@ async def finalize_backup(vm_id: str, backup_id: str, request: Request):
     target_host_ip = backup["target_host_ip"]
     vm_name = backup["vm_name"]
 
+    # Get volumes of the VM and order by deviceid
+    volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
+    volumes = volumes_data["listvolumesresponse"].get("volume", [])
+    sorted_volumes = sorted(volumes, key=lambda x: x["deviceid"])
+
+    payload_volumes = {
+        "volumes": [
+            {"id": vol["id"],
+             "name": vol.get("name"),
+             "storageid": vol["storageid"],
+             "path": vol["path"]
+            }
+         for vol in sorted_volumes]
+    }
+
     finalize_url = f"https://{target_host_ip}:54322/images/internal/backup/{vm_name}/finalize"
     async with httpx.AsyncClient(verify=False) as client:
         headers = {"Authorization": INTERNAL_TOKEN}
-        response = await client.post(finalize_url, headers=headers)
+        response = await client.post(finalize_url, headers=headers, json=payload_volumes)
         if response.status_code != 200:
             raise HTTPException(status_code=response.status_code, detail=f"Failed to finalize backup: {response.text}")
 
