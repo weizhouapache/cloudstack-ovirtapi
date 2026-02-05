@@ -686,15 +686,20 @@ def get_extents_via_nbd(image, bitmap_name = None, vm_state=None, context="dirty
                 offset += length
 
         elif context == "dirty":
-            def callback(offset, length, flags, _handle):
-                if length == 0:
-                    return
-                extents.append({
-                    "start": offset,
-                    "length": length,
-                    "dirty": nbd.STATE_DIRTY in flags,
-                    "zero": nbd.STATE_ZERO in flags
-                })
+            def callback(metacontext, offset, entries, handle):
+                pos = offset
+                for i in range(0, len(entries), 2):
+                    length = entries[i]
+                    flags = entries[i+1]
+                    dirty = bool(flags & nbd.STATE_DIRTY)
+                    zero = bool(flags & nbd.STATE_ZERO)
+                    extents.append({
+                        "start": pos,
+                        "length": length,
+                        "dirty": dirty,
+                        "zero": zero,
+                    })
+                    pos += length
 
             conn.block_status(
                 img_size,
