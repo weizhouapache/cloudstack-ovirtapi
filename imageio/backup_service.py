@@ -816,6 +816,7 @@ def finalize_backup_vm(vm, volumes):
                     logger.error(f"Error removing previous bitmap {meta["previous_checkpoint"]} from {volume_path}: {e}")
 
 
+        meta["previous_mode"] = None
         meta["previous_checkpoint"] = None
         save_meta(vm, meta)
 
@@ -842,13 +843,24 @@ async def finalize_backup(vm: str, request: Request):
 def generate_checkpoint_xml_from_bitmap(vm, last_checkpoint, disk_paths):
     # generate checkpoint xml like below
     checkpoint_xml = f"<domaincheckpoint><name>{last_checkpoint}</name><disks>"
+    checkpoint_xml += f"<creationTime>{extract_timestamp(last_checkpoint)}</creationTime>"
     for disk in disk_paths.keys():
-        checkpoint_xml += f"<disk name='{disk}'></disk>"
+        checkpoint_xml += f"<disk name='{disk}' checkpoint='bitmap' bitmap='{last_checkpoint}'></disk>"
     checkpoint_xml += "</disks></domaincheckpoint>"
 
     logger.debug(f"checkpoint xml for {vm}: {checkpoint_xml}")
 
     return checkpoint_xml
+
+def extract_timestamp(checkpoint_name):
+    from datetime import datetime, timezone
+    import re
+    match = re.search(r'(\d{8}-\d{6})', checkpoint_name)
+    if match:
+        timestamp = match.group(1)
+        dt = datetime.strptime(timestamp, "%Y%m%d-%H%M%S")
+        return int(dt.replace(tzinfo=timezone.utc).timestamp())
+    return 1767225600   # 2026-01-01 00:00:00 UTC
 
 # =============================
 # Internal endpoint: Get image extents
