@@ -124,52 +124,47 @@ def full_backup_running_vm(vm, dom):
     vm_dir = os.path.join(BACKUP_ROOT, vm)
     os.makedirs(vm_dir, exist_ok=True)
 
-    result = {}
-
-    # Generate backup XML configuration for full backup
-    backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir)
-
     # For full backup, we'll use a specific checkpoint name pattern
     checkpoint_name = f"full-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
     checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
 
+    # Generate backup XML configuration for full backup
+    backup_xml = generate_backup_xml(vm, disk_paths, vm_dir, None, checkpoint_name)
+
     run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml)
 
-    # Update result with target paths from backup XML
-    for disk, path in targets.items():
-        result[disk] = path
-
-    return result, checkpoint_name
+    return checkpoint_name
 
 
 # =============================
 # Running VM incremental (virsh backup-begin)
 # =============================
 
-def generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id=None):
+def generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id=None, new_checkpoint_name=None):
     root = ET.Element("domainbackup")
     
     # Add incremental element with checkpoint reference if provided
     if checkpoint_id:
+        root = ET.Element("domainbackup", {"mode": "pull"})
         incr_element = ET.SubElement(root, "incremental")
         incr_element.text = checkpoint_id
     else:
         # For full backup, we don't add the incremental element
-        pass
+        root = ET.Element("domainbackup", {"mode": "pull"})
+
+    # Add NBD server
+    # <server transport="unix" socket="/path/to/server"/>
+    ET.SubElement(root, "server", {"transport": "unix", "socket": f"/tmp/nbd-{vm}-{new_checkpoint_name}.sock"})
 
     disks_elem = ET.SubElement(root, "disks")
 
-    targets = {}
-
-    backup_type = "incremental" if checkpoint_id else "full"
-
     for disk in disk_paths.keys():
-        file_path = os.path.join(vm_dir, f"{disk}-{backup_type}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.qcow2")
-        d = ET.SubElement(disks_elem, "disk", {"name": disk, "type": "file"})
-        ET.SubElement(d, "target", {"file": file_path})
-        targets[disk] = file_path
+        if checkpoint_id:
+            d = ET.SubElement(disks_elem, "disk", {"name": disk, "exportname": disk, "exportbitmap": checkpoint_id})
+        else:
+            d = ET.SubElement(disks_elem, "disk", {"name": disk, "exportname": disk})
 
-    return ET.tostring(root).decode(), targets
+    return ET.tostring(root).decode()
 
 
 def run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml):
@@ -192,7 +187,9 @@ def run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml):
         "--backupxml", backup_xml_file,
         "--checkpointxml", checkpont_xml_file
     ]
-    subprocess.run(cmd, check=True)
+    proc = subprocess.Popen(cmd)
+    wait_for_socket(f"/tmp/nbd-{vm}-{checkpoint_name}.sock")
+
 
 # =============================
 # Internal method: Check backup job status
@@ -204,6 +201,9 @@ def check_backup_job_status(vm_name: str) -> dict:
     Uses virsh domjobinfo command to determine backup status.
     Returns a dictionary with backup status information.
     """
+
+    # Since the backup job exposes the VM via NBD server, this returns False always, which means the VM is ready for veeam backup
+
     try:
         # Run virsh domjobinfo command
         result = subprocess.run(
@@ -226,7 +226,7 @@ def check_backup_job_status(vm_name: str) -> dict:
         backup_in_progress = False
         for line in job_info.split('\n'):
             if "Operation:" in line and "Backup" in line:
-                backup_in_progress = True
+                backup_in_progress = False
                 break
 
         return {
@@ -278,7 +278,7 @@ async def backup_vm(vm: str, request: Request):
     # FULL BACKUP of Running VM
     # -------------------------
     if not checkpoint_id and state == "running":
-        full_images, checkpoint_name = full_backup_running_vm(vm, dom)
+        checkpoint_name = full_backup_running_vm(vm, dom)
 
         meta["previous_mode"] = meta["mode"]
         meta["previous_checkpoint"] = meta["last_checkpoint"]
@@ -287,12 +287,11 @@ async def backup_vm(vm: str, request: Request):
         meta["disks"] = {}
 
         i = 0
-        for disk, path in full_images.items():
+        for disk in disk_paths.keys():
             index = "disk" + str(i)
             i += 1
             meta["disks"][index] = {
                 "device_name": disk,
-                "backup_path": path,                # the full backup path, will be removed when finalize the backup
                 "file_path": disk_paths.get(disk),  # the original path
             }
 
@@ -399,20 +398,19 @@ async def backup_vm(vm: str, request: Request):
                     subprocess.run(cmd, check=True, shell=True)
                     logger.info(f"Created checkpoint {meta['last_checkpoint']} from bitmap")
 
-            backup_xml, targets = generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id)
-
             checkpoint_name = f"incremental-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
             checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
+
+            backup_xml = generate_backup_xml(vm, disk_paths, vm_dir, checkpoint_id, checkpoint_name)
 
             run_virsh_backup_begin(vm, checkpoint_name, backup_xml, checkpoint_xml)
 
             i = 0
-            for disk, path in targets.items():
+            for disk in disk_paths.keys():
                 index = "disk" + str(i)
                 i += 1
                 meta["disks"][index] = {
                     "device_name": disk,
-                    "backup_path": path,
                     "file_path": disk_paths.get(disk)
                 }
 
@@ -420,6 +418,7 @@ async def backup_vm(vm: str, request: Request):
             meta["previous_checkpoint"] = meta["last_checkpoint"]
             meta["mode"] = "cbt"
             meta["last_checkpoint"] = checkpoint_name
+            save_meta(vm, meta)
 
         # ---- Stopped VM: bitmap ----
         else:
@@ -449,8 +448,7 @@ async def backup_vm(vm: str, request: Request):
             meta["previous_checkpoint"] = meta["last_checkpoint"]
             meta["mode"] = "bitmap"
             meta["last_checkpoint"] = checkpoint_name
-
-        save_meta(vm, meta)
+            save_meta(vm, meta)
 
         return BackupResponse(
             vm_name=vm,
@@ -469,6 +467,7 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
     dom, state = get_vm(vm)
 
     if meta["mode"] == "cbt":
+        # online backup for running vm
         # Find the disk by file_path instead of assuming the disk parameter matches the key
         disk_key = None
         for k, v in meta["disks"].items():
@@ -477,26 +476,33 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
                 break
 
         if not disk_key:
-            raise HTTPException(status_code=404, detail=f"Disk image {diskpath} not found")
+            raise HTTPException(status_code=404, detail=f"Disk label for {diskpath} not found")
 
-        image = meta["disks"][disk_key]["backup_path"]
-        if not os.path.exists(image):
-            raise HTTPException(status_code=404, detail=f"Backup image for {diskpath} not found")
+        if not os.path.exists(diskpath):
+            raise HTTPException(status_code=404, detail=f"Disk image for {diskpath} not found")
+
+        socket_path = f"/tmp/nbd-{vm}-{meta["last_checkpoint"]}.sock"
+        disk_label = meta["disks"][disk_key].get("device_name")
 
     elif meta["mode"] == "bitmap":
-        image = diskpath
-        if not os.path.exists(image):
-            raise HTTPException(status_code=404, detail=f"Disk image {image} not found")
+        # offline backup for stopped vm
+        if not os.path.exists(diskpath):
+            raise HTTPException(status_code=404, detail=f"Disk image for {diskpath} not found")
+        socket_path = None
+        disk_label = None
     else:
         raise HTTPException(status_code=400, detail="Invalid backup mode")
 
+    meta["context"] = context
+    save_meta(vm, meta)
+
     if context == "zero":
         # Full backup
-        return get_extents_via_nbd(image, context = "zero")
+        return get_extents_via_nbd(diskpath, socket_path=socket_path, disk_label=disk_label, context = "zero")
 
     if context == "dirty":
         # Incremental backup
-        return get_extents_via_nbd(image, bitmap_name=meta["previous_checkpoint"], vm_state=state, context = "dirty")
+        return get_extents_via_nbd(diskpath, bitmap_name=meta["previous_checkpoint"], socket_path=socket_path, disk_label=disk_label, context = "dirty")
 
     raise HTTPException(status_code=400, detail="Invalid context")
 
@@ -517,34 +523,41 @@ def download_range(vm: str, diskpath: str, request: Request):
                 break
 
         if not disk_key:
-            raise HTTPException(status_code=404, detail=f"Disk image {diskpath} not found")
+            raise HTTPException(status_code=404, detail=f"Disk label for {diskpath} not found")
 
-        image = meta["disks"][disk_key]["backup_path"]
-        if not os.path.exists(image):
-            raise HTTPException(status_code=404, detail=f"Backup image for {diskpath} not found")
+        socket_path = f"/tmp/nbd-{vm}-{meta["last_checkpoint"]}.sock"
+        disk_label = meta["disks"][disk_key].get("device_name")
 
     elif meta["mode"] == "bitmap":
-        image = diskpath
-        if not os.path.exists(image):
-            raise HTTPException(status_code=404, detail=f"Disk image {image} not found")
+        socket_path = None
+        disk_label = None
     else:
         raise HTTPException(status_code=400, detail="Invalid backup mode")
 
-    def reader(start, length, image):
-        with open(image, "rb") as f:
-            f.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = f.read(min(1024 * 1024, remaining))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-                yield chunk
+    if not os.path.exists(diskpath):
+        raise HTTPException(status_code=404, detail=f"Disk image for {diskpath} not found")
+
+    if meta["context"] == "dirty":
+        bitmap_name = meta["previous_checkpoint"]
+    else:
+        bitmap_name = None
+
+    if socket_path:
+        # NBD server is already running via "virsh backup-begin"
+        logger.debug(f"Using existing NBD server for image {diskpath} with socket {socket_path}")
+        proc = None
+    else:
+        socket_path, proc = create_nbd_socket(diskpath, bitmap_name=bitmap_name)
+        logger.debug(f"Started NBD server for image {diskpath} with socket {socket_path} and proc {proc}")
 
     def reader_via_nbd(start: int, length: int, image: str):
-        socket_path, proc = create_nbd_socket(image)
         conn = nbd.NBD()
         try:
+            if bitmap_name:
+                # Tell NBD which bitmap to use
+                conn.add_meta_context(f"qemu:dirty-bitmap:{bitmap_name}")
+            if disk_label:
+                conn.set_export_name(disk_label)
             conn.connect_unix(socket_path)
             offset = start
             remaining = length
@@ -559,21 +572,22 @@ def download_range(vm: str, diskpath: str, request: Request):
                 remaining -= chunk_len
         finally:
             conn.close()
-            proc.terminate()
-            proc.wait()
-            if os.path.exists(socket_path):
-                os.unlink(socket_path)
 
-    file_size = get_virtual_size(image)
+    file_size = get_virtual_size(diskpath)
     range_header = request.headers.get("range")
 
     if not range_header:
         # No range requested, return full file
-        return StreamingResponse(
-            reader_via_nbd(0, file_size, image),
+        response = StreamingResponse(
+            reader_via_nbd(0, file_size, diskpath),
             headers={"Content-Length": str(file_size)},
             media_type="application/octet-stream"
         )
+        if proc:
+            proc.terminate()
+            proc.wait()
+    
+        return response
 
     # Parse range header (format: "bytes=start-end")
     try:
@@ -595,20 +609,23 @@ def download_range(vm: str, diskpath: str, request: Request):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid range format")
 
-
-
     headers = {
         "Content-Range": f"bytes {start}-{start+length-1}/{file_size}/*",
         "Content-Length": str(length),
         "Accept-Ranges": "bytes"
     }
 
-    return StreamingResponse(
-        reader_via_nbd(start, length, image),
+    response = StreamingResponse(
+        reader_via_nbd(start, length, diskpath),
         media_type="application/octet-stream",
         headers=headers,
         status_code=206
     )
+    if proc:
+        proc.terminate()
+        proc.wait()
+
+    return response
 
 # =============================
 # Internal API endpoint: Check backup job status
@@ -639,7 +656,7 @@ def get_backup_status(vm: str, request: Request):
 # =============================
 
 
-def get_extents_via_nbd(image, bitmap_name = None, vm_state=None, context="dirty"):
+def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=None, context="dirty"):
     """
     Generate image extents for Veeam from raw or qcow2 image.
 
@@ -650,14 +667,22 @@ def get_extents_via_nbd(image, bitmap_name = None, vm_state=None, context="dirty
 
     extents = []
 
-    socket_path, proc = create_nbd_socket(image, bitmap_name, vm_state)
-    logger.debug(f"Started NBD server for image {image} with socket {socket_path} and proc {proc}")
+    if socket_path:
+        # NBD server is already running via "virsh backup-begin"
+        logger.debug(f"Using existing NBD server for image {image} with socket {socket_path}")
+        proc = None
+    else:
+        socket_path, proc = create_nbd_socket(image, bitmap_name)
+        logger.debug(f"Started NBD server for image {image} with socket {socket_path} and proc {proc}")
 
     conn = nbd.NBD()
     try:
         if bitmap_name:
             # Tell NBD which bitmap to use
             conn.add_meta_context(f"qemu:dirty-bitmap:{bitmap_name}")
+
+        if disk_label:
+            conn.set_export_name(disk_label)
 
         conn.connect_unix(socket_path)
 
@@ -708,10 +733,10 @@ def get_extents_via_nbd(image, bitmap_name = None, vm_state=None, context="dirty
             )
     finally:
         conn.close()  # must close explicitly
-        proc.terminate()
-        proc.wait()
-        if os.path.exists(socket_path):
-            os.unlink(socket_path)
+        if proc:
+            logger.debug(f"Terminating NBD server for image {image} with proc {proc}")
+            proc.terminate()
+            proc.wait()
 
     logger.info(f"Extents of {image} before merging: {extents}")
 
@@ -741,16 +766,14 @@ def get_extents_via_nbd(image, bitmap_name = None, vm_state=None, context="dirty
 # Internal method: Create NBD socket and wait for connection
 # =============================
 
-def create_nbd_socket(image, bitmap_name=None, vm_state=None):
+def create_nbd_socket(image, bitmap_name=None):
     socket_path = f"/tmp/nbd-{os.path.basename(image)}-{uuid.uuid4().hex}.sock"
     if os.path.exists(socket_path):
         os.remove(socket_path)
-    if bitmap_name and vm_state == "running":
-        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", f"--bitmap={bitmap_name}", image, "--snapshot"]
-    elif bitmap_name and vm_state != "running":
-        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", f"--bitmap={bitmap_name}", image]
+    if bitmap_name:
+        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", "--shared", "100", f"--bitmap={bitmap_name}", image]
     else:
-        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", image]
+        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", "--shared", "100", image]
     logger.debug(f"Starting NBD server: {cmd}")
     proc = subprocess.Popen(cmd)
     wait_for_socket(socket_path)
@@ -796,7 +819,13 @@ def finalize_backup_vm(vm, volumes):
 
         if state == "running":
             try:
+                subprocess.run(["virsh", "domjobabort", vm], check=True)
+                logger.debug(f"Aborted backup job and stopped NBD server for {vm}")
+            except Exception as e:
+                logger.error(f"Error aborting backup job for {vm}: {e}")
+            try:
                 subprocess.run(["virsh", "checkpoint-delete", vm, previous_checkpoint], check=True)
+                logger.debug(f"Deleted previous checkpoint {previous_checkpoint} for {vm}")                
             except Exception as e:
                 logger.error(f"Error deleting previous checkpoint: {e}")
         elif meta["previous_checkpoint"] and volumes:
