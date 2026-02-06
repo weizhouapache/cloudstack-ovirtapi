@@ -679,7 +679,9 @@ def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=
     try:
         if bitmap_name:
             # Tell NBD which bitmap to use
-            conn.add_meta_context(f"qemu:dirty-bitmap:{bitmap_name}")
+            conn.add_meta_context(f"{nbd.CONTEXT_QEMU_DIRTY_BITMAP}{bitmap_name}")
+        else:
+            conn.add_meta_context(nbd.CONTEXT_BASE_ALLOCATION)    # only metadata for allocation
 
         if disk_label:
             conn.set_export_name(disk_label)
@@ -693,22 +695,26 @@ def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=
         img_size = conn.get_size()  # virtual size
 
         if context == "zero" or bitmap_name is None:
-            offset = 0
-            while offset < img_size:
-                length = min(CHUNK_SIZE, img_size - offset)
-                data = conn.pread(length, offset)  # read virtual bytes
+            def callback(metacontext, offset, entries, handle):
+                pos = offset
+                for i in range(0, len(entries), 2):
+                    length = entries[i]
+                    flags = entries[i+1]
+                    zero = bool(flags & nbd.STATE_ZERO)
+                    hole = bool(flags & nbd.STATE_HOLE)
+                    extents.append({
+                        "start": pos,
+                        "length": length,
+                        "zero": zero,
+                        "hole": hole,
+                    })
+                    pos += length
 
-                is_zero = all(b == 0 for b in data)
-
-                # hole detection: if qcow2 and fully zero, consider it a hole
-                hole = is_zero and conn.is_hole(offset, length) if hasattr(conn, "is_hole") else False
-                extents.append({
-                    "start": offset,
-                    "length": length,
-                    "zero": is_zero,
-                    "hole": hole
-                })
-                offset += length
+            conn.block_status(
+                img_size,
+                0,
+                callback
+            )
 
         elif context == "dirty":
             def callback(metacontext, offset, entries, handle):
