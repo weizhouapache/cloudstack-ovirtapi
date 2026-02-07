@@ -281,11 +281,14 @@ async def create_disk(request: Request):
         # Extract parameters from the request
         disk_name = disk_params.get("name", "new-disk")
         disk_size = disk_params.get("provisioned_size", 10737418240)  # 10GB default
+        disk_size_GB = int(int(disk_size) / (1024 * 1024 * 1024))
+        if disk_size_GB * 1024 * 1024 * 1024 < int(disk_size):
+            disk_size_GB += 1
         
         # Prepare parameters for CloudStack createVolume API
         cs_params = {
             "name": disk_name,
-            "size": str((int(disk_size)) / (1024 * 1024 * 1024)),  # Convert to string for API call
+            "size": disk_size_GB,  # Convert to string for API call
         }
         
         # Add additional parameters if provided
