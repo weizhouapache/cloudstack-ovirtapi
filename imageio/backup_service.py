@@ -19,6 +19,9 @@ from imageio.logging_imageio import logger
 # Import the internal token
 INTERNAL_TOKEN = IMAGEIO.get("internal_token", None)
 
+# In-memory cache for NBD processes
+nbd_processes = {}
+
 
 # =============================
 # Config
@@ -461,7 +464,7 @@ async def backup_vm(vm: str, request: Request):
 # Internal method: Get extents for backup image, used by service.py
 # =============================
 
-def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: str = "zero"):
+def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: str = "zero", transfer_id: str = None):
 
     meta = load_meta(vm)
     dom, state = get_vm(vm)
@@ -496,13 +499,16 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
     meta["context"] = context
     save_meta(vm, meta)
 
+    logger.debug(f"Getting extents via NBD server for image {diskpath} and transfer_id {transfer_id}")
+
     if context == "zero":
         # Full backup
-        return get_extents_via_nbd(diskpath, socket_path=socket_path, disk_label=disk_label, context = "zero")
+        return get_extents_via_nbd(diskpath, socket_path=socket_path, disk_label=disk_label, context = "zero", transfer_id=transfer_id)
 
     if context == "dirty":
         # Incremental backup
-        return get_extents_via_nbd(diskpath, bitmap_name=meta["previous_checkpoint"], socket_path=socket_path, disk_label=disk_label, context = "dirty")
+        return get_extents_via_nbd(diskpath, bitmap_name=meta["previous_checkpoint"], socket_path=socket_path,
+                disk_label=disk_label, context = "dirty", transfer_id=transfer_id)
 
     raise HTTPException(status_code=400, detail="Invalid context")
 
@@ -510,7 +516,7 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
 # Internal method: Range download, used by service.py
 # =============================
 
-def download_range(vm: str, diskpath: str, request: Request):
+def download_range(vm: str, diskpath: str, request: Request, transfer_id: str):
         
     meta = load_meta(vm)
 
@@ -547,18 +553,35 @@ def download_range(vm: str, diskpath: str, request: Request):
         logger.debug(f"Using existing NBD server for image {diskpath} with socket {socket_path}")
         proc = None
     else:
-        socket_path, proc = create_nbd_socket(diskpath, bitmap_name=bitmap_name)
-        logger.debug(f"Started NBD server for image {diskpath} with socket {socket_path} and proc {proc}")
+        socket_path = get_socket_path(diskpath, transfer_id)
+        if os.path.exists(socket_path):
+            logger.debug(f"Using existing NBD server for image {diskpath} with socket {socket_path}")
+        else:
+            socket_path, proc = create_nbd_socket(diskpath, bitmap_name=bitmap_name, transfer_id=transfer_id)
+            nbd_processes[diskpath] = proc
+            logger.debug(f"Started NBD server for image {diskpath} with socket {socket_path} and proc {proc}")
 
-    def reader_via_nbd(start: int, length: int, image: str):
+    if not os.path.exists(socket_path):
+        raise HTTPException(status_code=404, detail=f"Socket {socket_path} not found")
+
+    conn = nbd.NBD()
+    logger.debug(f"Test: Connecting to NBD socket {socket_path}")
+    conn.connect_unix(socket_path)
+    logger.debug(f"Test: NBD socket {socket_path} size: {conn.get_size()}")  # conn.get_size()
+    conn.close()
+
+    def reader_via_nbd(start: int, length: int, image: str, disk_label: str = None, bitmap_name: str = None, socket_path: str = None):
         conn = nbd.NBD()
         try:
             if bitmap_name:
                 # Tell NBD which bitmap to use
-                conn.add_meta_context(f"qemu:dirty-bitmap:{bitmap_name}")
+                conn.add_meta_context(f"{nbd.CONTEXT_QEMU_DIRTY_BITMAP}{bitmap_name}")
             if disk_label:
                 conn.set_export_name(disk_label)
+
+            logger.debug(f"Connecting to NBD socket {socket_path}")
             conn.connect_unix(socket_path)
+
             offset = start
             remaining = length
 
@@ -578,16 +601,11 @@ def download_range(vm: str, diskpath: str, request: Request):
 
     if not range_header:
         # No range requested, return full file
-        response = StreamingResponse(
-            reader_via_nbd(0, file_size, diskpath),
+        return StreamingResponse(
+            reader_via_nbd(0, file_size, diskpath, disk_label, bitmap_name, socket_path),
             headers={"Content-Length": str(file_size)},
             media_type="application/octet-stream"
         )
-        if proc:
-            proc.terminate()
-            proc.wait()
-    
-        return response
 
     # Parse range header (format: "bytes=start-end")
     try:
@@ -615,17 +633,12 @@ def download_range(vm: str, diskpath: str, request: Request):
         "Accept-Ranges": "bytes"
     }
 
-    response = StreamingResponse(
-        reader_via_nbd(start, length, diskpath),
+    return StreamingResponse(
+        reader_via_nbd(start, length, diskpath, disk_label, bitmap_name, socket_path),
         media_type="application/octet-stream",
         headers=headers,
         status_code=206
     )
-    if proc:
-        proc.terminate()
-        proc.wait()
-
-    return response
 
 # =============================
 # Internal API endpoint: Check backup job status
@@ -656,7 +669,7 @@ def get_backup_status(vm: str, request: Request):
 # =============================
 
 
-def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=None, context="dirty"):
+def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=None, context="dirty", transfer_id: str = None):
     """
     Generate image extents for Veeam from raw or qcow2 image.
 
@@ -672,7 +685,8 @@ def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=
         logger.debug(f"Using existing NBD server for image {image} with socket {socket_path}")
         proc = None
     else:
-        socket_path, proc = create_nbd_socket(image, bitmap_name)
+        logger.debug(f"Starting NBD server for image {image} for transfer_id {transfer_id}")
+        socket_path, proc = create_nbd_socket(image, bitmap_name, transfer_id=transfer_id)
         logger.debug(f"Started NBD server for image {image} with socket {socket_path} and proc {proc}")
 
     conn = nbd.NBD()
@@ -740,7 +754,6 @@ def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=
     finally:
         conn.close()  # must close explicitly
         if proc:
-            logger.debug(f"Terminating NBD server for image {image} with proc {proc}")
             proc.terminate()
             proc.wait()
 
@@ -772,14 +785,25 @@ def get_extents_via_nbd(image, bitmap_name = None, socket_path=None, disk_label=
 # Internal method: Create NBD socket and wait for connection
 # =============================
 
-def create_nbd_socket(image, bitmap_name=None):
-    socket_path = f"/tmp/nbd-{os.path.basename(image)}-{uuid.uuid4().hex}.sock"
+def get_socket_path(image, transfer_id: str = None):
+    if transfer_id:
+        socket_path = f"/tmp/nbd-{os.path.basename(image)}--{transfer_id}.sock"
+    else:
+        socket_path = f"/tmp/nbd-{os.path.basename(image)}--{uuid.uuid4().hex}.sock"
+    return socket_path
+
+def create_nbd_socket(image, bitmap_name=None, read_only=True, transfer_id=None):
+    socket_path = get_socket_path(image, transfer_id)
     if os.path.exists(socket_path):
         os.remove(socket_path)
-    if bitmap_name:
-        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", "--shared", "100", f"--bitmap={bitmap_name}", image]
+    if read_only:
+        read_only_flag = "--read-only"
     else:
-        cmd = ["qemu-nbd", "-f", "qcow2", "--read-only", f"--socket={socket_path}", "--shared", "100", image]
+        read_only_flag = ""
+    if bitmap_name:
+        cmd = ["qemu-nbd", "-f", "qcow2", read_only_flag, "--persistent", f"--socket={socket_path}", "--shared", "100", f"--bitmap={bitmap_name}", image]
+    else:
+        cmd = ["qemu-nbd", "-f", "qcow2", read_only_flag, "--persistent", f"--socket={socket_path}", "--shared", "100", image]
     logger.debug(f"Starting NBD server: {cmd}")
     proc = subprocess.Popen(cmd)
     wait_for_socket(socket_path)
@@ -819,16 +843,28 @@ def finalize_backup_vm(vm, volumes):
     meta = load_meta(vm)
     previous_checkpoint = meta["previous_checkpoint"]
 
+    dom, state = get_vm(vm)
+    if state == "running":
+        try:
+            subprocess.run(["virsh", "domjobabort", vm], check=True)
+            logger.debug(f"Aborted backup job and stopped NBD server for {vm}")
+        except Exception as e:
+            logger.error(f"Error aborting backup job for {vm}: {e}")
+
+    else:
+        for volume in volumes:
+            # stop NBD process
+            volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
+            proc = nbd_processes.get(volume_path)
+            if proc:
+                logger.debug(f"Terminating NBD server for image {volume_path} with proc {proc}")
+                proc.terminate()
+                proc.wait()
+
     # remove previous checkpint by virsh checkpoint-delete
     if previous_checkpoint:
-        dom, state = get_vm(vm)
 
         if state == "running":
-            try:
-                subprocess.run(["virsh", "domjobabort", vm], check=True)
-                logger.debug(f"Aborted backup job and stopped NBD server for {vm}")
-            except Exception as e:
-                logger.error(f"Error aborting backup job for {vm}: {e}")
             try:
                 subprocess.run(["virsh", "checkpoint-delete", vm, previous_checkpoint], check=True)
                 logger.debug(f"Deleted previous checkpoint {previous_checkpoint} for {vm}")                
@@ -896,38 +932,3 @@ def extract_timestamp(checkpoint_name):
         dt = datetime.strptime(timestamp, "%Y%m%d-%H%M%S")
         return int(dt.replace(tzinfo=timezone.utc).timestamp())
     return 1767225600   # 2026-01-01 00:00:00 UTC
-
-# =============================
-# Internal endpoint: Get image extents
-# =============================
-
-@backup_router.get("/internal/image/extents")
-def get_image_extents(image_path: str, context: str = "zero", bitmap_name: str = None, request: Request = None):
-    """
-    Internal endpoint to get extents of an image file.
-
-    Args:
-        image_path: Path to the image file
-        context: Context type - "zero" for full backup, "dirty" for incremental
-
-    Returns:
-        List of extents with their properties
-    """
-
-    # Check internal authentication
-    if not check_internal_auth(request, INTERNAL_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
-
-    # Check if image file exists
-    if not os.path.exists(image_path):
-        raise HTTPException(status_code=404, detail=f"Image file not found: {image_path}")
-
-    # Determine file format
-    if context == "dirty":
-        extents = get_extents_via_nbd(image_path, bitmap_name=bitmap_name)
-    else:
-        # For raw files, return single extent covering entire file
-        size = get_virtual_size(image_path)
-        extents = [{"start": 0, "length": size, "zero": False, "hole": False}]
-
-    return {"extents": extents}

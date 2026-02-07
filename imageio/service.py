@@ -173,7 +173,8 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
         return create_response(request, "extents", extents_response)
 
     # the rest is for backups
-    return get_extents_for_backup(vm_name, t["file_path"], request, context)
+    logger.debug("Getting extents for backup with transfer_id %s", transfer_id)
+    return get_extents_for_backup(vm_name, t["file_path"], request, context, transfer_id)
 
 
 # ---- DOWNLOAD with Range support ----
@@ -189,7 +190,7 @@ def download_transfer(transfer_id: str, request: Request):
     #file_size = os.path.getsize(file_path)
     file_size = get_virtual_size(file_path)
 
-    return download_range(vm_name, file_path, request)
+    return download_range(vm_name, file_path, request, transfer_id)
 
 # ---- UPLOAD / RESTORE (PUT with Range) ----
 
