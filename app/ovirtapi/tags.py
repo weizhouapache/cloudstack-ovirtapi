@@ -6,17 +6,30 @@ import uuid
 router = APIRouter()
 
 # In-memory store for tags (since CloudStack tags work differently)
-vm_tags = {}
-
-def cs_tag_to_ovirt(tag: dict) -> dict:
-    """
-    Convert a CloudStack Tag to an oVirt-compatible Tag payload.
-    """
-    return {
-        "id": tag.get("id", str(uuid.uuid4())),
-        "name": tag.get("key", tag.get("tag", "untitled")),
-        "description": tag.get("value", ""),
-    }
+vm_tags = [ {
+    "parent" : {
+      "href" : "/ovirt-engine/api/tags/00000000-0000-0000-0000-000000000000",
+      "id" : "00000000-0000-0000-0000-000000000000"
+    },
+    "name" : "veeam-manual",
+    "description" : "tag for manual veeam backup",
+    "href" : "/ovirt-engine/api/tags/cfc3cf05-e2e8-4754-8302-0d0c98180e8e",
+    "id" : "cfc3cf05-e2e8-4754-8302-0d0c98180e8e"
+  }, {
+    "parent" : {
+      "href" : "/ovirt-engine/api/tags/00000000-0000-0000-0000-000000000000",
+      "id" : "00000000-0000-0000-0000-000000000000"
+    },
+    "name" : "veeam-auto",
+    "description" : "tag for automatic veeam backup",
+    "href" : "/ovirt-engine/api/tags/4a009dee-3a86-4bc1-81ff-670d64618734",
+    "id" : "4a009dee-3a86-4bc1-81ff-670d64618734"
+  }, {
+    "name" : "root",
+    "description" : "root",
+    "href" : "/ovirt-engine/api/tags/00000000-0000-0000-0000-000000000000",
+    "id" : "00000000-0000-0000-0000-000000000000"
+  } ]
 
 @router.get("/tags")
 async def list_tags(request: Request):
@@ -29,19 +42,7 @@ async def list_tags(request: Request):
     try:
         # In a real implementation, this would aggregate tags from various resources
         # For now, we'll return a simulated list of tags
-        all_tags = []
-        
-        # Get all VM tags
-        for vm_id, tags in vm_tags.items():
-            for tag in tags:
-                if tag not in all_tags:
-                    all_tags.append({
-                        "id": str(uuid.uuid4()),
-                        "name": tag,
-                        "description": f"Tag for VM {vm_id}"
-                    })
-        
-        return create_response(request, "tags", all_tags)
+        return create_response(request, "tags", vm_tags)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list tags: {str(e)}")
 
@@ -65,14 +66,9 @@ async def assign_tag_to_vm(vm_id: str, request: Request):
         # In a real implementation, we would parse the request body to get the tag name
         # and call CloudStack's createTags API
         
-        # Initialize tags for this VM if not present
-        if vm_id not in vm_tags:
-            vm_tags[vm_id] = []
-        
         # For simulation purposes, let's say we're adding a "backup" tag
         new_tag = "backup"  # This would come from request body in a real implementation
-        if new_tag not in vm_tags[vm_id]:
-            vm_tags[vm_id].append(new_tag)
+
         
         # Return the assigned tag
         payload = {
