@@ -335,3 +335,58 @@ async def create_disk(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON in request body")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create disk: {str(e)}")
+
+@router.post("/disks/{disk_id}/convert")
+async def convert_disk(disk_id: str, request: Request):
+    # call convertVolume API in CloudStack to convert the disk format
+    try:
+        # Get the original disk
+        data = await cs_request(request, "listVolumes", {"id": disk_id})
+        volumes = data["listvolumesresponse"].get("volume", [])
+
+        if not volumes:
+            raise HTTPException(status_code=404, detail="Disk not found")
+
+        # Get the request body to extract convert parameters
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8")
+        convert_params = json.loads(body_str) if body_str else {}
+
+        format = convert_params.get("disk").get("format")
+        sparse = convert_params.get("disk").get("sparse", None)
+
+        if format not in ["raw", "qcow2"]:
+            raise HTTPException(status_code=400, detail="Invalid format specified. Supported formats are 'raw' and 'qcow2'.")
+
+        cs_params = {
+            "id": disk_id,
+            "format": format
+        }
+        if sparse is not None:
+            if not isinstance(sparse, bool):
+                raise HTTPException(status_code=400, detail="Invalid value for 'sparse'. It should be a boolean.")
+            cs_params["provisioningtype"] = "thin" if sparse else "fat"
+
+        # Call CloudStack API to create the volume
+        data = await cs_request(request, "convertVolume", cs_params)
+
+        # Check for job response (async)
+        job_id = get_job_id(data)
+
+        # Wait for async job to complete
+        job_result = await wait_for_job(request, job_id)
+
+        # Extract the created volume from the response
+        volume = job_result.get("volume", {})
+
+        # Convert to oVirt format and return
+        payload = cs_volume_to_ovirt(volume)
+
+        return create_response(request, "disk", payload)
+
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Missing required parameter: {str(e)}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in request body")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to convert disk: {str(e)}")
