@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_for_backup, download_via_nbd, get_virtual_size, CHUNK_SIZE, upload_via_nbd
+from imageio.backup_service import backup_router, get_extents_for_backup, download_via_nbd, get_virtual_size, CHUNK_SIZE, upload_via_nbd, shutdown_nbd_server
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -257,8 +257,14 @@ async def patch_imageio(transfer_id: str, request: Request):
     data = await request.json()
     logger.info(f"Patching tranfer {transfer_id} with data: {data}")
 
-    return Response(status_code=200)
+    t = transfers.get(transfer_id)
+    if t and t["mode"] == "upload" and t["request_format"] == "raw":
+        # For upload, we need to stop the NBD server after upload is done, so we can finalize the qcow2 file and make it ready for use.
+        logger.info(f"Stopping NBD process for transfer {transfer_id}")
+        file_path = t["file_path"]
+        shutdown_nbd_server(file_path)
 
+    return Response(status_code=200)
 
 # =========================
 # Run ImageIO Service

@@ -878,6 +878,18 @@ def get_virtual_size(file_path):
     raise ValueError(f"Could not find virtual size for {file_path}")
 
 # =============================
+# Internal method: Shutdown NBD server for a disk
+# =============================
+
+def shutdown_nbd_server(diskpath):
+    proc = nbd_processes.get(diskpath)
+    if proc:
+        logger.debug(f"Terminating NBD server for image {diskpath} with proc {proc}")
+        proc.terminate()
+        proc.wait()
+        del nbd_processes[diskpath]
+
+# =============================
 # Internal method: Finalize backup - merge backup into VM
 # =============================
 
@@ -902,11 +914,7 @@ def finalize_backup_vm(vm, volumes):
         for volume in volumes:
             # stop NBD process
             volume_path = f"/mnt/{volume['storageid']}/{volume['path']}"
-            proc = nbd_processes.get(volume_path)
-            if proc:
-                logger.debug(f"Terminating NBD server for image {volume_path} with proc {proc}")
-                proc.terminate()
-                proc.wait()
+            shutdown_nbd_server(volume_path)
 
     # remove previous checkpint by virsh checkpoint-delete
     if previous_checkpoint:
