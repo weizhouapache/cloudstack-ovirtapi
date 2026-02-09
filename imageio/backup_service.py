@@ -391,7 +391,7 @@ async def backup_vm(vm: str, request: Request):
                 output = subprocess.run(cmd, check=True, capture_output=True, text=True)
                 if meta["last_checkpoint"] not in output.stdout:
                     # generate checkpoint xml with the bitmap
-                    previous_checkpoint_xml = generate_checkpoint_xml_from_bitmap(meta["last_checkpoint"], disk_paths)
+                    previous_checkpoint_xml = generate_checkpoint_xml_from_bitmap(vm, meta["last_checkpoint"], disk_paths)
                     # run "echo previous_checkpoint_xml | virsh checkpoint-create --xmlfile /dev/stdin --redefine"
                     cmd = ["echo", previous_checkpoint_xml, "|",
                         "virsh", "checkpoint-create",
