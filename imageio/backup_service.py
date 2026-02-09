@@ -393,13 +393,14 @@ async def backup_vm(vm: str, request: Request):
                     # generate checkpoint xml with the bitmap
                     previous_checkpoint_xml = generate_checkpoint_xml_from_bitmap(vm, meta["last_checkpoint"], disk_paths)
                     # run "echo previous_checkpoint_xml | virsh checkpoint-create --xmlfile /dev/stdin --redefine"
-                    cmd = ["echo", previous_checkpoint_xml, "|",
-                        "virsh", "checkpoint-create", vm,
+                    cmd = ["virsh", "checkpoint-create", vm,
                         "--xmlfile", "/dev/stdin",
                         "--redefine"
                     ]
-                    subprocess.run(cmd, check=True, shell=True)
+                    subprocess.run(cmd, input=previous_checkpoint_xml, check=True, text=True)
                     logger.info(f"Created checkpoint {meta['last_checkpoint']} from bitmap")
+
+                    subprocess.run(["virsh", "checkpoint-list", vm], check=True)
 
             checkpoint_name = f"incremental-backup-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
             checkpoint_xml = f"<domaincheckpoint><name>{checkpoint_name}</name></domaincheckpoint>"
@@ -968,8 +969,9 @@ async def finalize_backup(vm: str, request: Request):
 
 def generate_checkpoint_xml_from_bitmap(vm, last_checkpoint, disk_paths):
     # generate checkpoint xml like below
-    checkpoint_xml = f"<domaincheckpoint><name>{last_checkpoint}</name><disks>"
+    checkpoint_xml = f"<domaincheckpoint><name>{last_checkpoint}</name>"
     checkpoint_xml += f"<creationTime>{extract_timestamp(last_checkpoint)}</creationTime>"
+    checkpoint_xml += "<disks>"
     for disk in disk_paths.keys():
         checkpoint_xml += f"<disk name='{disk}' checkpoint='bitmap' bitmap='{last_checkpoint}'></disk>"
     checkpoint_xml += "</disks></domaincheckpoint>"
