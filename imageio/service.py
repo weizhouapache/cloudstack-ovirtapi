@@ -11,7 +11,7 @@ from imageio.logging_imageio import setup_logging
 from app.security.certs import ensure_certificates
 from app.security.certs import get_default_ip
 from imageio.config import IMAGEIO, SSL, LOGGING
-from imageio.backup_service import backup_router, get_extents_for_backup, download_range, get_virtual_size, CHUNK_SIZE
+from imageio.backup_service import backup_router, get_extents_for_backup, download_via_nbd, get_virtual_size, CHUNK_SIZE, upload_via_nbd
 from imageio.utils import check_internal_auth
 from app.utils.response_builder import create_response
 from app.utils.request_logging import RequestLoggingMiddleware
@@ -45,7 +45,8 @@ transfers: Dict[str, dict] = {}
 # Example transfer entry:
 # transfers[transfer_id] = {
 #     "file_path": "/data/disk1.qcow2",
-#     "format": "qcow2" | "raw",
+#     "volume_format": "qcow2",
+#     "request_format": "cow",
 #     "mode": "download" | "upload",
 # }
 
@@ -70,7 +71,8 @@ def create_download_transfer(payload: dict, request: Request):
     {
         "id": "disk-1",
         "path": "/data/disk1.qcow2",
-        "format": "qcow2",
+        "volume_format": "qcow2",  # Format of the source volume
+        "request_format": "cow",    # Format of the requested transfer (cow or raw)
         "vm_name": "vm-1",
         "backup_id": "backup-1"
     }
@@ -81,7 +83,8 @@ def create_download_transfer(payload: dict, request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
 
     file_path = payload["path"]
-    fmt = payload.get("format", "raw")
+    volume_format = payload.get("volume_format", "qcow2")
+    request_format = payload.get("request_format", "cow")
     volume_id = payload.get("id", None)
     backup_id = payload.get("backup_id", None)
     vm_name = payload.get("vm_name", None)
@@ -93,7 +96,8 @@ def create_download_transfer(payload: dict, request: Request):
 
     transfers[transfer_id] = {
         "file_path": file_path,
-        "format": fmt,
+        "volume_format": volume_format,
+        "request_format": request_format,
         "vm_name": vm_name,
         "volume_id": volume_id,
         "backup_id": backup_id,     # For backups only
@@ -115,7 +119,8 @@ def create_upload_transfer(payload: dict, request: Request):
     payload example:
     {
         "path": "/data/restore.qcow2",
-        "format": "qcow2",
+        "volume_format": "qcow2",  # Format of the source volume
+        "request_format": "raw",    # Format of the requested transfer (cow or raw)
         "size": 10737418240
     }
     """
@@ -124,22 +129,15 @@ def create_upload_transfer(payload: dict, request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid internal token")
 
     file_path = payload["path"]
-    fmt = payload.get("format", "raw")
+    volume_format = payload.get("volume_format", "qcow2")
+    request_format = payload.get("request_format", "raw")
 
     transfer_id = str(uuid.uuid4())
 
-    # Pre-create file
-    size = payload.get("size")
-    if size and fmt == "raw":
-        with open(file_path, "wb") as f:
-            f.truncate(size)
-    elif fmt == "qcow2":
-        with open(file_path, "wb") as f:
-            f.truncate(0)
-
     transfers[transfer_id] = {
         "file_path": file_path,
-        "format": fmt,
+        "volume_format": volume_format,
+        "request_format": request_format,
         "mode": "upload"
     }
 
@@ -158,12 +156,12 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
         raise HTTPException(404)
 
     vm_name = t.get("vm_name")
-    volume_id = t.get("volume_id")
-    backup_id = t.get("backup_id")
+    file_path = t["file_path"]
 
-    if not backup_id or t["format"] != "qcow2":
+    if t["volume_format"] != "qcow2":
+        # a bit confused: when request_format is cow, it means the image is in qcow2/cow format, which supports sparse file with internal metadata. So we can just return the whole file as one extent without zero or hole.
         # full download of the volume
-        size = get_virtual_size(t["file_path"])
+        size = get_virtual_size(file_path)
         # default to zero context
         extents_response = {
             "extents": [
@@ -174,7 +172,7 @@ def get_extents(transfer_id: str, request: Request, context: str = "zero"):
 
     # the rest is for backups
     logger.debug("Getting extents for backup with transfer_id %s", transfer_id)
-    return get_extents_for_backup(vm_name, t["file_path"], request, context, transfer_id)
+    return get_extents_for_backup(vm_name, file_path, request, context, transfer_id)
 
 
 # ---- DOWNLOAD with Range support ----
@@ -187,10 +185,8 @@ def download_transfer(transfer_id: str, request: Request):
 
     vm_name = t.get("vm_name")
     file_path = t["file_path"]
-    #file_size = os.path.getsize(file_path)
-    file_size = get_virtual_size(file_path)
 
-    return download_range(vm_name, file_path, request, transfer_id)
+    return download_via_nbd(vm_name, file_path, request, transfer_id)
 
 # ---- UPLOAD / RESTORE (PUT with Range) ----
 
@@ -203,15 +199,18 @@ async def upload_transfer(transfer_id: str, request: Request):
     file_path = t["file_path"]
     logger.info(f"Uploading to file {file_path}")
 
+    request_format = t["request_format"]
+
+    # if format is cow, the original file is already created as a sparse file, so we can just write to it based on the ranges.
     range_header = request.headers.get("content-range")
-    if not range_header:
+    if request_format == "cow" and not range_header:
         with open(file_path, "r+b") as f:
             async for chunk in request.stream():
                 if not chunk:
                     continue
                 f.write(chunk)
 
-    else:
+    elif request_format == "cow" and range_header:
         # Example: bytes 2097152-2162687/3758096384
         _, range_part = range_header.split(" ")
         range_and_size = range_part.split("/")
@@ -226,6 +225,13 @@ async def upload_transfer(transfer_id: str, request: Request):
                 if not chunk:
                     continue
                 f.write(chunk)
+
+    # if format is raw, the raw data is sent. We need to setup a NBD server to receive the data and write to the file.
+    # We need to method upload_range_via_nbd which is similar as download_range.
+    elif request_format == "raw":
+        # Assume the destination file is qcow2 format, so setup a NBD server
+        file_path = t["file_path"]
+        await upload_via_nbd(file_path, request, transfer_id)
 
     return Response(status_code=204)
 

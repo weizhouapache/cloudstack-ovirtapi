@@ -50,6 +50,7 @@ async def create_image_transfer(request: Request):
     volume_id = imagetransfer_params.get("disk", {}).get("id")
     backup_id = imagetransfer_params.get("backup", {}).get("id")        # Used for backup
     direction = imagetransfer_params.get("direction", "upload")
+    request_format = imagetransfer_params.get("format", "raw")
 
     vm_id = None
 
@@ -115,7 +116,8 @@ async def create_image_transfer(request: Request):
         payload = {
             "id": volume_id,
             "path": volume_path,  # Use path from CloudStack
-            "format": volume_format  # Use format from CloudStack
+            "volume_format": volume_format,  # Use format from CloudStack
+            "request_format": request_format,  # Use format from request
         }
         if backup:
             payload["backup_id"] = backup_id   # Used for backup
@@ -137,7 +139,8 @@ async def create_image_transfer(request: Request):
         # For upload, we need to specify where to store the uploaded data
         payload = {
             "path": volume_path,  # Use path from CloudStack
-            "format": volume_format,  # Use format from CloudStack
+            "volume_format": volume_format,  # Use format from CloudStack
+            "request_format": request_format,  # Use format from request
             "size": volume_size  # Use size from CloudStack
         }
         # Call imageio service to create upload transfer
@@ -269,7 +272,7 @@ async def finalize_image_transfer(transfer_id: str, request: Request):
     payload = {
         "active": False,
         "direction": transfer["direction"],
-        "format": "cow",
+        "format": transfer.get("format", "raw"),
         "id": transfer["id"],
         "phase": transfer["phase"],
         "proxy_url": transfer["proxy_url"],

@@ -394,7 +394,7 @@ async def backup_vm(vm: str, request: Request):
                     previous_checkpoint_xml = generate_checkpoint_xml_from_bitmap(vm, meta["last_checkpoint"], disk_paths)
                     # run "echo previous_checkpoint_xml | virsh checkpoint-create --xmlfile /dev/stdin --redefine"
                     cmd = ["echo", previous_checkpoint_xml, "|",
-                        "virsh", "checkpoint-create",
+                        "virsh", "checkpoint-create", vm,
                         "--xmlfile", "/dev/stdin",
                         "--redefine"
                     ]
@@ -513,10 +513,10 @@ def get_extents_for_backup(vm: str, diskpath: str, request: Request, context: st
     raise HTTPException(status_code=400, detail="Invalid context")
 
 # =============================
-# Internal method: Range download, used by service.py
+# Internal method: download via NBD, used by service.py
 # =============================
 
-def download_range(vm: str, diskpath: str, request: Request, transfer_id: str):
+def download_via_nbd(vm: str, diskpath: str, request: Request, transfer_id: str):
         
     meta = load_meta(vm)
 
@@ -566,6 +566,8 @@ def download_range(vm: str, diskpath: str, request: Request, transfer_id: str):
 
     conn = nbd.NBD()
     logger.debug(f"Test: Connecting to NBD socket {socket_path}")
+    if disk_label:
+        conn.set_export_name(disk_label)
     conn.connect_unix(socket_path)
     logger.debug(f"Test: NBD socket {socket_path} size: {conn.get_size()}")  # conn.get_size()
     conn.close()
@@ -639,6 +641,52 @@ def download_range(vm: str, diskpath: str, request: Request, transfer_id: str):
         headers=headers,
         status_code=206
     )
+
+# =============================
+# Internal method: upload via NBD, used by service.py
+# =============================
+
+async def upload_via_nbd(diskpath: str, request: Request, transfer_id: str):
+    """
+    Set up a writable NBD server for the qcow2 file at diskpath,
+    then stream data from the request and write it via NBD.
+    """
+    # Parse content-range header: "bytes start-end/total_size"
+    range_header = request.headers.get("content-range")
+    if range_header:
+        _, range_part = range_header.split(" ")
+        range_and_size = range_part.split("/")
+        range_only = range_and_size[0]
+        start_s, end_s = range_only.split("-")
+        start = int(start_s)
+    else:
+        start = 0
+
+    # Get or create a writable NBD socket
+    socket_path = get_socket_path(diskpath, transfer_id)
+    if os.path.exists(socket_path):
+        logger.debug(f"Using existing writable NBD server for image {diskpath} with socket {socket_path}")
+    else:
+        socket_path, proc = create_nbd_socket(diskpath, read_only=False, transfer_id=transfer_id)
+        nbd_processes[diskpath] = proc
+        logger.debug(f"Started writable NBD server for image {diskpath} with socket {socket_path}")
+
+    # Connect and write data via NBD
+    conn = nbd.NBD()
+    try:
+        conn.connect_unix(socket_path)
+
+        offset = start
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            conn.pwrite(chunk, offset)
+            offset += len(chunk)
+
+        conn.flush()
+        logger.debug(f"Wrote {offset - start} bytes to {diskpath} starting at offset {start}")
+    finally:
+        conn.close()
 
 # =============================
 # Internal API endpoint: Check backup job status
@@ -796,14 +844,13 @@ def create_nbd_socket(image, bitmap_name=None, read_only=True, transfer_id=None)
     socket_path = get_socket_path(image, transfer_id)
     if os.path.exists(socket_path):
         os.remove(socket_path)
+    cmd = ["qemu-nbd", "-f", "qcow2"]
     if read_only:
-        read_only_flag = "--read-only"
-    else:
-        read_only_flag = ""
+        cmd.append("--read-only")
+    cmd.extend(["--persistent", f"--socket={socket_path}", "--shared", "100"])
     if bitmap_name:
-        cmd = ["qemu-nbd", "-f", "qcow2", read_only_flag, "--persistent", f"--socket={socket_path}", "--shared", "100", f"--bitmap={bitmap_name}", image]
-    else:
-        cmd = ["qemu-nbd", "-f", "qcow2", read_only_flag, "--persistent", f"--socket={socket_path}", "--shared", "100", image]
+        cmd.append(f"--bitmap={bitmap_name}")
+    cmd.append(image)
     logger.debug(f"Starting NBD server: {cmd}")
     proc = subprocess.Popen(cmd)
     wait_for_socket(socket_path)
