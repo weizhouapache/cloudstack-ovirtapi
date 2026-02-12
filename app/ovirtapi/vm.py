@@ -350,7 +350,7 @@ async def cs_vm_to_ovirt(vm: dict, request: Request) -> dict:
                 }
             ]
         },
-        "name": vm.get("name", "veeam-worker"),
+        "name": vm.get("instancename", "veeam-worker"),
         "description": vm.get("displayname", vm.get("name")),
         "comment": "",
         "bios": {
@@ -633,7 +633,7 @@ def generate_vm_xml(vm, volumes):
     })
     
     # Basic VM information
-    ET.SubElement(content, "Name").text = vm.get("name", "unnamed-vm")
+    ET.SubElement(content, "Name").text = vm.get("instancename", "unnamed-vm")
     ET.SubElement(content, "Description").text = vm.get("displayname", "")
     ET.SubElement(content, "Comment").text = ""
     ET.SubElement(content, "CreationDate").text = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
