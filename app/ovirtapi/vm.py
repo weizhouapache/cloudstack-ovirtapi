@@ -654,6 +654,9 @@ def generate_vm_xml(vm, volumes):
     ET.SubElement(content, "AutoStartup").text = "false"
     ET.SubElement(content, "Priority").text = "0"
     ET.SubElement(content, "CreatedByUserId").text = vm.get("userid")
+    ET.SubElement(content, "CreatedByDomain").text = vm.get("domain")
+    ET.SubElement(content, "CreatedByDomainId").text = vm.get("domainid")
+    ET.SubElement(content, "CreatedByAccount").text = vm.get("account")
     ET.SubElement(content, "MigrationSupport").text = "0"
     ET.SubElement(content, "IsBootMenuEnabled").text = "false"
     ET.SubElement(content, "IsSpiceFileTransferEnabled").text = "true"
