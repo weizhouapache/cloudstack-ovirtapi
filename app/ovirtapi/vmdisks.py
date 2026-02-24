@@ -98,8 +98,33 @@ async def attach_disk(vm_id: str, request: Request):
         volumes = volumes_data["listvolumesresponse"].get("volume", [])
         if not volumes or len(volumes) == 0:
             cs_params["deviceid"] = 0
+        else:
+            cs_params["deviceid"] = len(volumes)
 
-        # Call CloudStack API to create the VM
+        # Assign the volume to the owner of virtual machine if the volume is not already assigned to an account
+        vm = vms[0]
+        volumes_data = await cs_request(request, "listVolumes", {"id": disk_id})
+        volume = volumes_data["listvolumesresponse"].get("volume", [])[0]
+        if volume.get("domainid") != vm.get("domainid") or volume.get("account") != vm.get("account"):
+            # list accounts to find the account id of the owner of virtual machine
+            listaccount_params = {
+                "domainid": vm.get("domainid"),
+                "name": vm.get("account")
+            }
+            accounts_data = await cs_request(request, "listAccounts", listaccount_params)
+            accounts = accounts_data["listaccountsresponse"].get("account", [])
+            if not accounts or len(accounts) == 0:
+                raise HTTPException(status_code=404, detail="Account not found for the VM owner")
+            account = accounts[0]
+
+            # Assign the volume to the account of the owner of virtual machine
+            assignvolume_params = {
+                "accountid": account.get("id"),
+                "volumeid": volume.get("id")
+            }
+            await cs_request(request, "assignVolume", assignvolume_params)
+
+        # Call CloudStack API to attach the volume to the VM
         data = await cs_request(request, "attachVolume", cs_params)
 
         # Check for job response (async)

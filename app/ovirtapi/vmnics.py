@@ -88,6 +88,30 @@ async def create_vm_nic(vm_id: str, request: Request):
         if not network_id:
             raise HTTPException(status_code=400, detail="Network ID (vnic_profile.id) is required")
 
+        # Assign the virtual machine to the account of the owner of network if it's not already assigned
+        vm = vms[0]
+        network_data = await cs_request(request, "listNetworks", {"id": network_id})
+        network = network_data["listnetworksresponse"].get("network", [])[0]
+        if network.get("domainid") != vm.get("domainid") or network.get("account") != vm.get("account"):
+            # list accounts to find the account id of the owner of network
+            listaccount_params = {
+                "domainid": network.get("domainid"),
+                "name": network.get("account")
+            }
+            accounts_data = await cs_request(request, "listAccounts", listaccount_params)
+            accounts = accounts_data["listaccountsresponse"].get("account", [])
+            if not accounts or len(accounts) == 0:
+                raise HTTPException(status_code=404, detail="Account not found for the network owner")
+            account = accounts[0]
+
+            # Assign the vm to the account of the owner of network
+            assignvm_params = {
+                "virtualmachineid": vm.get("id"),
+                "domainid": account.get("domainid"),
+                "account": account.get("name")
+            }
+            await cs_request(request, "assignVirtualMachine", assignvm_params)
+
         # Prepare parameters for CloudStack addNicToVirtualMachine API
         cs_params = {
             "virtualmachineid": vm_id,
