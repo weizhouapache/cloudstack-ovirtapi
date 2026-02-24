@@ -93,23 +93,26 @@ async def create_vm_nic(vm_id: str, request: Request):
         network_data = await cs_request(request, "listNetworks", {"id": network_id})
         network = network_data["listnetworksresponse"].get("network", [])[0]
         if network.get("domainid") != vm.get("domainid") or network.get("account") != vm.get("account"):
-            # list accounts to find the account id of the owner of network
-            listaccount_params = {
-                "domainid": network.get("domainid"),
-                "name": network.get("account")
-            }
-            accounts_data = await cs_request(request, "listAccounts", listaccount_params)
-            accounts = accounts_data["listaccountsresponse"].get("account", [])
-            if not accounts or len(accounts) == 0:
-                raise HTTPException(status_code=404, detail="Account not found for the network owner")
-            account = accounts[0]
-
-            # Assign the vm to the account of the owner of network
             assignvm_params = {
                 "virtualmachineid": vm.get("id"),
-                "domainid": account.get("domainid"),
-                "account": account.get("name")
             }
+            if vm.get("projectid"):
+                assignvm_params["projectid"] = vm.get("projectid")
+            else:
+                # list accounts to find the account id of the owner of network
+                listaccount_params = {
+                    "domainid": network.get("domainid"),
+                    "name": network.get("account")
+                }
+                accounts_data = await cs_request(request, "listAccounts", listaccount_params)
+                accounts = accounts_data["listaccountsresponse"].get("account", [])
+                if not accounts or len(accounts) == 0:
+                    raise HTTPException(status_code=404, detail="Account not found for the network owner")
+                account = accounts[0]
+                assignvm_params["domainid"] = account.get("domainid")
+                assignvm_params["account"] = account.get("name")
+
+            # Assign the vm to the account of the owner of network
             await cs_request(request, "assignVirtualMachine", assignvm_params)
 
         # Prepare parameters for CloudStack addNicToVirtualMachine API

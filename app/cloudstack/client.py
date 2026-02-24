@@ -11,6 +11,8 @@ async def cs_request(request: Request, command: str, params: dict, method: str =
     params["command"] = command
     params["response"] = "json"
     params["listall"] = "true"
+    if command.lower() in ("listvirtualmachines", "listvolumes", "listnetworks", "listvmsnapshot"):
+        params["projectid"] = "-1"
 
     logger.debug(f"CloudStack request: {command}")
 

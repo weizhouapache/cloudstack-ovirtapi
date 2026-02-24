@@ -106,22 +106,25 @@ async def attach_disk(vm_id: str, request: Request):
         volumes_data = await cs_request(request, "listVolumes", {"id": disk_id})
         volume = volumes_data["listvolumesresponse"].get("volume", [])[0]
         if volume.get("domainid") != vm.get("domainid") or volume.get("account") != vm.get("account"):
-            # list accounts to find the account id of the owner of virtual machine
-            listaccount_params = {
-                "domainid": vm.get("domainid"),
-                "name": vm.get("account")
-            }
-            accounts_data = await cs_request(request, "listAccounts", listaccount_params)
-            accounts = accounts_data["listaccountsresponse"].get("account", [])
-            if not accounts or len(accounts) == 0:
-                raise HTTPException(status_code=404, detail="Account not found for the VM owner")
-            account = accounts[0]
-
-            # Assign the volume to the account of the owner of virtual machine
             assignvolume_params = {
-                "accountid": account.get("id"),
                 "volumeid": volume.get("id")
             }
+            if vm.get("projectid"):
+                assignvolume_params["projectid"] = vm.get("projectid")
+            else:
+                # list accounts to find the account id of the owner of virtual machine
+                listaccount_params = {
+                    "domainid": vm.get("domainid"),
+                    "name": vm.get("account")
+                }
+                accounts_data = await cs_request(request, "listAccounts", listaccount_params)
+                accounts = accounts_data["listaccountsresponse"].get("account", [])
+                if not accounts or len(accounts) == 0:
+                    raise HTTPException(status_code=404, detail="Account not found for the VM owner")
+                account = accounts[0]
+                assignvolume_params["accountid"] = account.get("id")
+
+            # Assign the volume to the account of the owner of virtual machine
             await cs_request(request, "assignVolume", assignvolume_params)
 
         # Call CloudStack API to attach the volume to the VM

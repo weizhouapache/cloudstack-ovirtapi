@@ -657,6 +657,7 @@ def generate_vm_xml(vm, volumes):
     ET.SubElement(content, "CreatedByDomain").text = vm.get("domain")
     ET.SubElement(content, "CreatedByDomainId").text = vm.get("domainid")
     ET.SubElement(content, "CreatedByAccount").text = vm.get("account")
+    ET.SubElement(content, "CreatedByProjectId").text = vm.get("projectid", "")
     ET.SubElement(content, "MigrationSupport").text = "0"
     ET.SubElement(content, "IsBootMenuEnabled").text = "false"
     ET.SubElement(content, "IsSpiceFileTransferEnabled").text = "true"
@@ -1022,6 +1023,7 @@ def parse_ovf(ovf_doc):
 
     domainid = get_text_by_local_name(root, "CreatedByDomainId")
     account = get_text_by_local_name(root, "CreatedByAccount")
+    projectid = get_text_by_local_name(root, "CreatedByProjectId")
 
     for item in root.iter():
         tag = item.tag
@@ -1045,7 +1047,7 @@ def parse_ovf(ovf_doc):
             if virtual_quantity.isdigit():
                 memory = int(virtual_quantity)
 
-    return domainid, account, cpu_cores, memory
+    return domainid, account, projectid, cpu_cores, memory
 
 @router.get("/vms")
 async def list_vms(request: Request):
@@ -1295,9 +1297,9 @@ async def create_vm(request: Request):
         # Extract disk and network information from OVF document if provided
         if "initialization" in vm_params and "configuration" in vm_params["initialization"] and "data" in vm_params["initialization"]["configuration"]:
             ovf_doc = vm_params["initialization"]["configuration"]["data"]
-            domainid, account, cpu_cores, memory = parse_ovf(ovf_doc)
+            domainid, account, projectid, cpu_cores, memory = parse_ovf(ovf_doc)
         else:
-            domainid, account = None, None
+            domainid, account, projectid = None, None, None
 
         # Prepare parameters for CloudStack deployVirtualMachine API
         # First, we need to determine appropriate service offering based on CPU and memory
@@ -1353,9 +1355,12 @@ async def create_vm(request: Request):
             "details[0].memory": int(int(memory_guaranteed) / 1024 / 1024)  # in MiB
         }
 
-        if domainid and account:
+        if domainid and (account or projectid):
             cs_params["domainid"] = domainid
-            cs_params["account"] = account
+            if projectid:
+                cs_params["projectid"] = projectid
+            else:
+                cs_params["account"] = account
 
         # Add user data (custom script) if provided
         if custom_script:
