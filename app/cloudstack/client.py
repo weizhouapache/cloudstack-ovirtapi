@@ -10,6 +10,7 @@ API_URL=CLOUDSTACK["endpoint"]
 async def cs_request(request: Request, command: str, params: dict, method: str = "GET"):
     params["command"] = command
     params["response"] = "json"
+    params["listall"] = "true"
 
     logger.debug(f"CloudStack request: {command}")
 
