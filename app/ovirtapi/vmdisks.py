@@ -7,52 +7,63 @@ import json
 
 router = APIRouter()
 
-def cs_volume_attachment_to_ovirt(volume: dict, vm_id: str) -> dict:
-    """
-    Convert a CloudStack Volume attachment to an oVirt-compatible DiskAttachment payload.
-    """
-    return {
-        "id": f"{vm_id}-{volume['id']}",  # Composite ID for the attachment
-        "vm": {"id": vm_id},
-        "disk": {
-            "id": volume["id"],
-            "name": volume.get("name", volume["id"]),
-            "status": "ok" if volume.get("state") == "Ready" else "locked",
-        },
-        "active": True,
-        "interface": "virtio",  # Default interface type
-        "logical_name": "",  # CloudStack doesn't expose this directly
-        "pass_discard": False,
-        "read_only": False,
-        "uses_scsi_reservation": False,
-        "bootable": volume.get("isbootable", False)
-    }
 
 @router.get("/vms/{vm_id}/diskattachments")
-async def list_disk_attachments(vm_id: str, request: Request):
+async def get_vm_disk_attachment(vm_id: str, request: Request):
     """
-    Lists all disk attachments for a VM.
+    Gets the disk attachments for a specific VM.
     """
-    try:
-        # Get VM details to confirm it exists
-        vm_data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
-        vms = vm_data["listvirtualmachinesresponse"].get("virtualmachine", [])
-        
-        if not vms:
-            raise HTTPException(status_code=404, detail="VM not found")
-        
-        # Get all volumes and filter by VM ID
-        volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
-        volumes = volumes_data["listvolumesresponse"].get("volume", [])
-        
-        # Convert volumes to disk attachments
-        attachments = [cs_volume_attachment_to_ovirt(vol, vm_id) for vol in volumes]
-        
-        return create_response(request, "disk_attachments", attachments)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list disk attachments: {str(e)}")
+    # First, get the VM to confirm it exists
+    data = await cs_request(request, "listVirtualMachines", {"id": vm_id})
+    vms = data["listvirtualmachinesresponse"].get("virtualmachine", [])
+
+    if not vms:
+        raise HTTPException(status_code=404, detail="VM not found")
+
+    # Get volumes attached to this VM
+    volumes_data = await cs_request(request, "listVolumes", {"virtualmachineid": vm_id})
+    volumes = volumes_data["listvolumesresponse"].get("volume", [])
+
+    # Convert volumes to disk attachment format
+    disk_attachments = []
+    for i, volume in enumerate(volumes):
+        volume_id = volume.get("id", f"disk-attachment-{i}")
+        # Create a disk attachment entry for each volume
+        disk_attachment = {
+            "id": volume_id,
+            "href": f"/ovirt-engine/api/vms/{vm_id}/diskattachments/{volume_id}",
+            "active": "true",
+            "bootable": str(volume.get("isbootable", False)).lower(),
+            "interface": "virtio",  # Default interface
+            "pass_discard": "false",
+            "read_only": "false",
+            "uses_scsi_reservation": "false",
+            "vm": {
+                "id": vm_id,
+                "href": f"/ovirt-engine/api/vms/{vm_id}"
+            },
+            "disk": {
+                "id": volume.get("id", f"disk-{i}"),
+                "href": f"/ovirt-engine/api/disks/{volume_id}",
+                "name": volume.get("name", volume_id),
+                "actual_size": int(volume.get("size", 0)),
+                "provisioned_size": int(volume.get("size", 0)),
+                "status": "ok" if volume.get("state") == "Ready" else "locked",
+                "sparse": str(volume.get("issparse", True)).lower(),
+                "bootable": str(volume.get("isbootable", False)).lower(),
+                "propagate_errors": "false",
+                "qcow_version": "qcow2_v3",
+                "wipe_after_delete": "false",
+                "content_type": "data",
+                "format": "cow",
+                "storage_type": "image"
+            }
+        }
+        disk_attachments.append(disk_attachment)
+
+    # Return the disk attachments as a collection
+    payload = {"disk_attachment": disk_attachments}
+    return create_response(request, "disk_attachment", payload)
 
 
 @router.post("/vms/{vm_id}/diskattachments")
