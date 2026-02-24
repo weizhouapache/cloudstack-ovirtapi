@@ -975,6 +975,78 @@ def generate_vm_xml(vm, volumes):
     xml_string = ET.tostring(envelope, encoding="unicode")
     return xml_string
 
+def parse_ovf(ovf_doc):
+    """
+    Parse OVF XML and extract domain id, account, cpu cores, and memory (MiB).
+
+    Accepts either:
+    - an OVF XML string
+    - a dict containing the XML under the "data" key
+    """
+    import xml.etree.ElementTree as ET
+
+    domainid = None
+    account = None
+    cpu_cores = 1
+    memory = 1024
+
+    if isinstance(ovf_doc, str):
+        xml_data = ovf_doc
+    else:
+        return domainid, account, cpu_cores, memory
+
+    if not xml_data:
+        return domainid, account, cpu_cores, memory
+
+    try:
+        root = ET.fromstring(xml_data)
+    except ET.ParseError:
+        logger.warning("Failed to parse OVF XML from initialization.configuration.data")
+        return domainid, account, cpu_cores, memory
+
+    def get_text_by_local_name(element, local_name):
+        for node in element.iter():
+            tag = node.tag
+            if isinstance(tag, str) and tag.split("}")[-1] == local_name:
+                value = (node.text or "").strip()
+                if value:
+                    return value
+        return None
+
+    def get_item_value(item, local_name):
+        for child in item:
+            tag = child.tag
+            if isinstance(tag, str) and tag.split("}")[-1] == local_name:
+                return (child.text or "").strip()
+        return ""
+
+    domainid = get_text_by_local_name(root, "CreatedByDomainId")
+    account = get_text_by_local_name(root, "CreatedByAccount")
+
+    for item in root.iter():
+        tag = item.tag
+        if not isinstance(tag, str) or tag.split("}")[-1] != "Item":
+            continue
+
+        resource_type = get_item_value(item, "ResourceType")
+
+        if resource_type == "3":
+            virtual_quantity = get_item_value(item, "VirtualQuantity")
+            if virtual_quantity.isdigit():
+                cpu_cores = int(virtual_quantity)
+            else:
+                sockets = get_item_value(item, "num_of_sockets")
+                per_socket = get_item_value(item, "cpu_per_socket")
+                if sockets.isdigit() and per_socket.isdigit():
+                    cpu_cores = int(sockets) * int(per_socket)
+
+        elif resource_type == "4":
+            virtual_quantity = get_item_value(item, "VirtualQuantity")
+            if virtual_quantity.isdigit():
+                memory = int(virtual_quantity)
+
+    return domainid, account, cpu_cores, memory
+
 @router.get("/vms")
 async def list_vms(request: Request):
     data = await cs_request(request,
@@ -1220,6 +1292,13 @@ async def create_vm(request: Request):
         memory_guaranteed = memory_policy.get("guaranteed", vm_memory)
         memory_max = memory_policy.get("max", vm_memory)
 
+        # Extract disk and network information from OVF document if provided
+        if "initialization" in vm_params and "configuration" in vm_params["initialization"] and "data" in vm_params["initialization"]["configuration"]:
+            ovf_doc = vm_params["initialization"]["configuration"]["data"]
+            domainid, account, cpu_cores, memory = parse_ovf(ovf_doc)
+        else:
+            domainid, account = None, None
+
         # Prepare parameters for CloudStack deployVirtualMachine API
         # First, we need to determine appropriate service offering based on CPU and memory
         # For now, we'll use a default service offering, but in a real implementation
@@ -1273,6 +1352,10 @@ async def create_vm(request: Request):
             "details[0].cpuSpeed": 1000,        # hardcoded
             "details[0].memory": int(int(memory_guaranteed) / 1024 / 1024)  # in MiB
         }
+
+        if domainid and account:
+            cs_params["domainid"] = domainid
+            cs_params["account"] = account
 
         # Add user data (custom script) if provided
         if custom_script:
