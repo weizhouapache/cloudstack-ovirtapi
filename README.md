@@ -1,4 +1,5 @@
 # CloudStack oVirt-Compatible API Server
+
 oVirt-Compatible REST API server for Apache CloudStack written in Python
 
 # Overview
@@ -9,19 +10,58 @@ Veeam Backup & Replication to integrate with Apache CloudStack (KVM).
 The service translates oVirt API calls from Veeam into CloudStack API calls,
 returning oVirt-compatible XML responses.
 
+# Architecture
+
+The project consists of three services deployed across two types of hosts:
+
+```
+  Veeam Backup & Replication
+          |
+          | HTTPS :443
+          v
+  ┌─────────────────────────────────────────────────────┐
+  │  CloudStack Management Server (or connected server) │
+  │                                                     │
+  │  App (API Server)              port 443             │
+  │    - oVirt-compatible REST API                      │
+  │    - Translates oVirt → CloudStack API calls        │
+  │                                                     │
+  │  ImageIO Proxy                 port 54323           │
+  │    - Routes transfer requests to KVM hosts          │
+  └─────────────────────────────────────────────────────┘
+          |
+          | HTTPS :54322
+          v
+  ┌─────────────────────────────────────────────────────┐
+  │  KVM Host (one or more)                             │
+  │                                                     │
+  │  ImageIO Service               port 54322           │
+  │    - Handles disk backup via libvirt + NBD          │
+  │    - Manages backup checkpoints                     │
+  │    - Streams disk data for backup/restore           │
+  └─────────────────────────────────────────────────────┘
+```
+
+| Service | Runs On | Port | Start Script | Stop Script |
+|---------|---------|------|--------------|-------------|
+| App (API Server) | CloudStack management server | 443 | `run.sh` | `stop.sh` |
+| ImageIO Proxy | CloudStack management server | 54323 | `proxy_run.sh` | `proxy_stop.sh` |
+| ImageIO Service | KVM host | 54322 | `imageio_run.sh` | `imageio_stop.sh` |
+
 # Key Features
 
 - Python + FastAPI
-- HTTPS only (self-managed certificates)
+- HTTPS only across all services (self-managed certificates)
 - oVirt Basic Auth and OAuth/Bearer support
 - Deterministic, non-reversible credential handling
 - CloudStack authentication bridge
 - XML-only responses (Veeam compatible)
+- Incremental backup via libvirt checkpoints and NBD (Network Block Device)
 - Extensible UHAPI surface
 
 # HTTPS & Certificate Management
 
-This service always runs over HTTPS.
+All three services run over HTTPS and share the same certificate infrastructure.
 
 ## Certificate loading order
 
@@ -29,11 +69,16 @@ This service always runs over HTTPS.
 - If not configured:
   - Load default certificate paths
 - If still missing:
-  - Generate a self-signed certificate
+  - Generate a self-signed certificate and CA
   - Persist it locally for reuse
 
 Self-signed certificates are supported.
 Veeam will prompt the user to trust the certificate once.
+
+The CA certificate is distributed to clients via:
+```
+GET /ovirt-engine/services/pki-resource?resource=ca-certificate&format=X509-PEM-CA
+```
 
 # Authentication
 
@@ -100,8 +145,8 @@ CloudStack returns:
 - account
 - domainid
 
-Session is cached internally
-Subsequent CloudStack calls reuse the session
+Session is cached internally.
+Subsequent CloudStack calls reuse the session.
 
 # Response Format
 
@@ -111,7 +156,7 @@ Subsequent CloudStack calls reuse the session
 - JSON intentionally not supported
 
 Example:
-```
+```xml
 <api>
   <product_info>
     <name>CloudStack oVirt-API</name>
@@ -121,35 +166,27 @@ Example:
 </api>
 ```
 
-# Implemented API (Initial)
+# Configuration
 
-```
-HEAD /ovirt-engine/api
-GET  /ovirt-engine/api
-```
+## App Configuration (`config.ini`)
 
-Purpose:
-- Authentication handshake
-- Capability discovery
-- Required by Veeam
+Located at the project root. Used by the API server and referenced when contacting the ImageIO service.
 
-# Configuration Example
-
-Example **config.ini**
-
-```
+```ini
 [server]
 host = 0.0.0.0
 port = 443
 path = /ovirt-engine
-public_ip =
+public_ip =                         # Auto-detected if empty
 
 [ssl]
+ca_cert_file = ./certs/root-ca.crt
+ca_key_file = ./certs/root-ca.key   # Required only if cert_file or key_file are missing
 cert_file = ./certs/server.crt
-key_file  = ./certs/server.key
+key_file = ./certs/server.key
 
 [cloudstack]
-endpoint = https://cloudstack.mgmt.server/client/api
+endpoint = http://localhost:8080/client/api
 
 [security]
 hmac_secret = very-long-random-secret
@@ -157,20 +194,125 @@ hmac_secret = very-long-random-secret
 [logging]
 level = DEBUG
 file = ./logs/app.log
+
+[imageio]
+internal_token = 1234567890         # Shared secret for App ↔ ImageIO communication
+```
+
+## ImageIO Configuration (`imageio/config.ini`)
+
+Located in the `imageio/` directory. Must be present on each KVM host running the ImageIO service, and on the management server running the ImageIO proxy.
+
+```ini
+[imageio]
+listen_host = 0.0.0.0
+listen_port = 54322
+path = /images
+public_ip =                         # Auto-detected if empty
+internal_token = 1234567890         # Must match the token in the app's config.ini
+
+[proxy]
+proxy_listen_host = 0.0.0.0
+proxy_listen_port = 54323
+proxy_public_ip =
+proxy_internal_token = 1234567890
+
+[ssl]
+ca_cert_file = ./certs/root-ca.crt
+ca_key_file = ./certs/root-ca.key   # Required only if cert_file or key_file are missing
+cert_file = ./certs/server.crt
+key_file = ./certs/server.key
+
+[logging]
+level = DEBUG
+file = ./logs/imageio.log
+```
+
+# ImageIO Service
+
+The ImageIO service runs on each **KVM host** (port 54322) and handles disk-level data operations for backup and restore. It is contacted directly by the API server and by Veeam (via the ImageIO proxy).
+
+## Purpose
+
+- Performs VM disk backups using libvirt checkpoints (full and incremental)
+- Streams disk data via NBD (Network Block Device) for efficient transfer
+- Hosts transfer sessions that Veeam uses to download or upload disk images
+
+## Backup Mechanism
+
+1. The API server contacts the ImageIO service at `https://{kvm_host_ip}:54322/images/internal/backup/{vm_name}`
+2. The ImageIO service uses libvirt to:
+   - Create a backup checkpoint for each disk
+   - Track the checkpoint ID for incremental backup support
+3. Disk data is streamed via NBD (libnbd)
+4. Checkpoint metadata is stored persistently in `/backup/meta/{vm}.json`
+5. Old checkpoints are automatically cleaned up
+
+**Note**: Backups require the VM to be running (libvirt CBT checkpoints only work on active VMs).
+
+## ImageIO Service Endpoints
+
+These are internal endpoints used by the API server and proxy. They are not called directly by Veeam.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/images/internal/backup/{vm_name}` | POST | Start a backup session for a VM |
+| `/images/internal/backup/{vm_name}/status` | GET | Check backup session status |
+| `/images/internal/backup/{vm_name}/finalize` | POST | Finalize backup and clean up |
+| `/images/internal/download` | POST | Create a download transfer session |
+| `/images/transfers/{transfer_id}` | GET | Get transfer status |
+| `/images/transfers/{transfer_id}/upload` | POST | Upload data (restore) |
+| `/images/transfers/{transfer_id}/download` | GET | Download data (backup) |
+| `/images/transfers/{transfer_id}/finalize` | POST | Finalize a transfer |
+
+## Running the ImageIO Service (on each KVM host)
+
+```bash
+# Start
+./imageio_run.sh
+
+# Stop
+./imageio_stop.sh
+
+# Manual start
+sudo python -m imageio.service
+```
+
+# ImageIO Proxy
+
+The ImageIO proxy runs on the **CloudStack management server** (port 54323) alongside the API server. It routes Veeam's image transfer requests to the correct KVM host.
+
+## Purpose
+
+- Veeam connects to a single proxy endpoint for all disk transfers
+- The proxy maps each transfer ID to the appropriate target KVM host IP
+- Transparently forwards GET/POST/PUT/DELETE requests to `https://{kvm_host}:54322`
+
+## Running the ImageIO Proxy
+
+```bash
+# Start
+./proxy_run.sh
+
+# Stop
+./proxy_stop.sh
+
+# Manual start
+sudo python -m imageio.proxy
 ```
 
 # Logging
 
-- No plaintext credentials
-- Authentication events logged (hashed IDs only)
-- CloudStack calls logged without secrets
-- Designed for correlation with Veeam logs
+- No plaintext credentials are ever logged
+- Authentication events logged with hashed IDs only
+- CloudStack API calls logged without secrets
+- All three services write to separate configurable log files
 
 # Design Principles
 
 - Behavioral compatibility > schema perfection
-- HTTPS only
-- Stateless API + session cache
+- HTTPS only across all services
+- Stateless API + in-memory session cache
 - Minimal UHAPI surface
 - Security first
 
@@ -184,21 +326,48 @@ Apache License 2.0
 
 Before running the application, ensure all required packages from `requirements.txt` are installed:
 
-```
+```bash
 pip install -r requirements.txt
 ```
 
 On Ubuntu systems, you can alternatively install the required packages using apt:
 
-```
+```bash
 sudo apt update
 sudo apt install python3-fastapi python3-uvicorn python3-httpx python3-lxml python3-cryptography python3-multipart python3-libvirt python3-libnbd
+```
+
+## Deployment Steps
+
+**1. On the CloudStack management server (or a connected server):**
+
+- Configure `config.ini` with your CloudStack endpoint, HMAC secret, and `internal_token`
+- Start the API server: `./run.sh`
+- Start the ImageIO proxy: `./proxy_run.sh`
+
+**2. On each KVM host:**
+
+- Copy the project (use `sync.sh` to rsync to multiple hosts)
+- Configure `imageio/config.ini` — ensure `internal_token` matches the value in `config.ini`
+- Start the ImageIO service: `./imageio_run.sh`
+
+## Syncing Code to KVM Hosts
+
+The `sync.sh` script deploys the code to one or more KVM hosts via rsync over SSH:
+
+```bash
+# Sync to default hosts defined in sync.sh
+./sync.sh
+
+# Sync to specific hosts
+./sync.sh 192.168.1.10 192.168.1.11
 ```
 
 ## Build and run
 
 ### Manual run
-```
+
+```bash
 python -m app.main
 ```
 
@@ -206,13 +375,13 @@ python -m app.main
 
 The project includes a `run.sh` script that runs the application as a background service with sudo privileges:
 
-```
+```bash
 ./run.sh
 ```
 
 **Note**: The `run.sh` script assumes all required packages from `requirements.txt` are already installed. Make sure to install them before running the script:
 
-```
+```bash
 pip install -r requirements.txt
 ./run.sh
 ```
@@ -221,7 +390,7 @@ pip install -r requirements.txt
 
 To stop the running application, use the `stop.sh` script:
 
-```
+```bash
 ./stop.sh
 ```
 
@@ -231,11 +400,13 @@ This will find and terminate the running instance of the CloudStack oVirt-Compat
 
 The application can be deployed using Docker. A Dockerfile is provided to build an image based on Ubuntu 24.04.
 
+**Note**: The Docker image runs only the API server. The ImageIO service must be run separately on each KVM host.
+
 ### Building the Docker Image
 
 To build the Docker image:
 
-```
+```bash
 docker build -t cloudstack-ovirtapi .
 ```
 
@@ -243,13 +414,13 @@ docker build -t cloudstack-ovirtapi .
 
 To run the application with Docker, mounting a local config.ini file:
 
-```
+```bash
 docker run -d -p 443:443 -v /path/to/local/config.ini:/app/config.ini --name cloudstack-ovirtapi cloudstack-ovirtapi
 ```
 
 Alternatively, you can configure the application using environment variables:
 
-```
+```bash
 docker run -d -p 443:443 \
   -e SERVER_HOST=0.0.0.0 \
   -e SERVER_PORT=443 \
@@ -263,9 +434,9 @@ docker run -d -p 443:443 \
   --name cloudstack-ovirtapi cloudstack-ovirtapi
 ```
 
-Or a simple example with just the CloudStack http endpoint:
+Or a simple example with just the CloudStack HTTP endpoint:
 
-```
+```bash
 docker run -d -p 443:443 \
   -e CLOUDSTACK_ENDPOINT=http://cloudstack.example.com:8080/client/api \
   --name cloudstack-ovirtapi cloudstack-ovirtapi
@@ -277,18 +448,17 @@ The Docker image will update the config.ini file with the provided environment v
 
 - GET request to retrieve a list of virtual machines:
 
-```
+```bash
 curl -k -X GET -H "Authorization: Basic $(echo -n 'admin:password' | base64)" https://localhost:443/ovirt-engine/api/vms
 ```
 
 - POST request to start a virtual machine:
 
-```
+```bash
 curl -k -X POST -H "Authorization: Basic $(echo -n 'admin:password' | base64)" https://localhost:443/ovirt-engine/api/vms/fef1d5a5-1598-4710-a50c-a4dcc5b2051d/start
 ```
 
 ## OAuth Authentication
-
 
 To authenticate using OAuth, you can follow these steps:
 
@@ -296,7 +466,7 @@ To authenticate using OAuth, you can follow these steps:
 
 For example:
 
-```
+```bash
 curl -k -X POST "https://localhost:443/ovirt-engine/sso/oauth/token" -d "grant_type=password&username=admin&password=password"
 ```
 
@@ -311,13 +481,13 @@ The response will include an access token in the `access_token` field. For examp
 }
 ```
 
-- Use the obtained access token to authenticate subsequent requests by setting the Authorization header with the value Bearer {access_token}. For example:
+- Use the obtained access token to authenticate subsequent requests by setting the Authorization header with the value `Bearer {access_token}`. For example:
 
-```
+```bash
 curl -k -H "Authorization: Bearer ji2mBN46rlzdlzFwzNLtRc_V9OrMFXmcDpCKzWzxUFo" https://localhost:443/ovirt-engine/api/vms
 ```
 
-Make sure to replace localhost:443 with the appropriate host and port for your environment.
+Make sure to replace `localhost:443` with the appropriate host and port for your environment.
 
 # Full list of APIs (In progress)
 
@@ -373,6 +543,12 @@ The oVirt REST API guide can be found at https://www.ovirt.org/documentation/doc
 
 The following APIs have been implemented in the CloudStack oVirtAPI server:
 
+### Authentication & PKI APIs
+- `POST /ovirt-engine/sso/oauth/token` - OAuth token generation
+- `POST /ovirt-engine/sso/oauth/revoke` - Token revocation
+- `GET /ovirt-engine/services/pki-resource` - CA certificate distribution
+- `GET/POST /ovirt-engine/api/logout` - Session logout
+
 ### Infrastructure APIs
 - `GET /api` - API root info (version, links)
 - `HEAD /api` - API health check
@@ -417,13 +593,15 @@ The following APIs have been implemented in the CloudStack oVirtAPI server:
 - `PUT /api/vms/{vmId}/nics/{nicId}` - Updates NIC
 - `DELETE /api/vms/{vmId}/nics/{nicId}` - Removes NIC
 
-### VM Backup & Snapshot APIs
+### VM Backup & Checkpoint APIs
 - `POST /api/vms/{vmId}/backups` - Creates VM backup
 - `GET /api/vms/{vmId}/backups/{backupId}` - Backup details
 - `GET /api/vms/{vmId}/backups/{backupId}/disks` - List of disks in the backup
 - `POST /api/vms/{vmId}/backups/{backupId}/finalize` - Finalizes the backup
 - `GET /api/vms/{vmId}/checkpoints` - List of checkpoints
 - `DELETE /api/vms/{vmId}/checkpoints/{checkpointId}` - Deletes a checkpoint
+
+### VM Snapshot APIs
 - `GET /api/vms/{vmId}/snapshots` - List of snapshots
 - `POST /api/vms/{vmId}/snapshots` - Creates snapshot
 - `GET /api/vms/{vmId}/snapshots/{snapshotId}` - Snapshot details
@@ -438,17 +616,11 @@ The following APIs have been implemented in the CloudStack oVirtAPI server:
 - `POST /api/vms/{id}/tags` - Assigns a tag to VM
 
 ### Image Transfer APIs
-- `POST /api/imagetransfers` - Creates new image transfers for backup/restore operations
-- `GET /api/imagetransfers/{id}` - Gets status of image transfers
-- `POST /api/imagetransfers/{id}/finalize` - Finalizes image transfers
-- `POST /api/imagetransfers/{id}/cancel` - Cancels image transfers
+- `POST /api/imagetransfers` - Creates new image transfer for backup/restore
+- `GET /api/imagetransfers/{id}` - Gets status of image transfer
+- `POST /api/imagetransfers/{id}/finalize` - Finalizes image transfer
+- `POST /api/imagetransfers/{id}/cancel` - Cancels image transfer
 
-### Images APIs
-- `GET /images/{image_id}/extents` - Gets image extents for incremental backup
+### Image & Extents APIs
 - `GET /images/{image_id}` - Gets image information
-
-### Authentication & PKI APIs
-- `POST /sso/oauth/token` - OAuth token endpoint
-- `GET /services/pki-resource?resource=ca-certificate&format=X509-PEM-CA` - Gets CA certificate
-- `POST /api/logout` - Logout endpoint
-
+- `GET /images/{image_id}/extents` - Gets image extents for incremental backup
