@@ -7,6 +7,7 @@ from app.utils.logging_config import logger
 
 import json
 import time
+from typing import Optional
 
 router = APIRouter()
 api_prefix = SERVER.get("path", "/ovirt-engine") + "/api"
@@ -1050,7 +1051,7 @@ def parse_ovf(ovf_doc):
     return domainid, account, projectid, cpu_cores, memory
 
 @router.get("/vms")
-async def list_vms(request: Request):
+async def list_vms(request: Request, follow: Optional[str] = None):
     data = await cs_request(request,
         "listVirtualMachines",
         {}
@@ -1059,6 +1060,37 @@ async def list_vms(request: Request):
 
     host_data = await cs_request(request, "listHosts", {"type": "Routing"})
     hosts = host_data["listhostsresponse"].get("host", [])
+
+    follow_tags = follow and "tags" in [f.strip() for f in follow.split(",")]
+
+    tags_by_vm = {}
+    if follow_tags:
+        from app.ovirtapi.tags import vm_tags as static_vm_tags
+        tags_data = await cs_request(request, "listTags", {
+            "key": "veeam_tag",
+            "resourcetype": "UserVm"
+        })
+        cs_tags = tags_data.get("listtagsresponse", {}).get("tag", [])
+        for cs_tag in cs_tags:
+            vm_id = cs_tag.get("resourceid")
+            tag_name = cs_tag.get("value")
+            matched = next((t for t in static_vm_tags if t.get("name") == tag_name), None)
+            tag_id = matched.get("id") if matched else tag_name
+            description = matched.get("description", "") if matched else ""
+            tags_by_vm.setdefault(vm_id, []).append({
+                "parent": {
+                    "href": "/ovirt-engine/api/tags/00000000-0000-0000-0000-000000000000",
+                    "id": "00000000-0000-0000-0000-000000000000"
+                },
+                "vm": {
+                    "href": f"/ovirt-engine/api/vms/{vm_id}",
+                    "id": vm_id
+                },
+                "name": tag_name,
+                "description": description,
+                "href": f"/ovirt-engine/api/vms/{vm_id}/tags/{tag_id}",
+                "id": tag_id
+            })
 
     payload = []
     # for each vm, get the host id and add it to the vm
@@ -1070,13 +1102,17 @@ async def list_vms(request: Request):
             host = next((host for host in hosts if host.get("id") == host_id), None)
             logger.debug(f"host: {host}")
             vm["clusterid"] = host.get("clusterid")
-        payload.append(await cs_vm_to_ovirt(vm, request))
+        ovirt_vm = await cs_vm_to_ovirt(vm, request)
+        if follow_tags:
+            vm_id = vm.get("id")
+            ovirt_vm["tags"] = {"tag": tags_by_vm.get(vm_id, [])}
+        payload.append(ovirt_vm)
 
     return create_response(request, "vms", payload)
 
 
 @router.get("/vms/{vm_id}")
-async def get_vm(vm_id: str, request: Request):
+async def get_vm(vm_id: str, request: Request, follow: Optional[str] = None):
     data = await cs_request(request,
         "listVirtualMachines",
         {"id": vm_id}
@@ -1098,6 +1134,36 @@ async def get_vm(vm_id: str, request: Request):
             vm["clusterid"] = host.get("clusterid")
 
     payload = await cs_vm_to_ovirt(vm, request)
+
+    if follow and "tags" in [f.strip() for f in follow.split(",")]:
+        from app.ovirtapi.tags import vm_tags as static_vm_tags
+        tags_data = await cs_request(request, "listTags", {
+            "key": "veeam_tag",
+            "resourceid": vm_id,
+            "resourcetype": "UserVm"
+        })
+        cs_tags = tags_data.get("listtagsresponse", {}).get("tag", [])
+        tag_list = []
+        for cs_tag in cs_tags:
+            tag_name = cs_tag.get("value")
+            matched = next((t for t in static_vm_tags if t.get("name") == tag_name), None)
+            tag_id = matched.get("id") if matched else tag_name
+            description = matched.get("description", "") if matched else ""
+            tag_list.append({
+                "parent": {
+                    "href": "/ovirt-engine/api/tags/00000000-0000-0000-0000-000000000000",
+                    "id": "00000000-0000-0000-0000-000000000000"
+                },
+                "vm": {
+                    "href": f"/ovirt-engine/api/vms/{vm_id}",
+                    "id": vm_id
+                },
+                "name": tag_name,
+                "description": description,
+                "href": f"/ovirt-engine/api/vms/{vm_id}/tags/{tag_id}",
+                "id": tag_id
+            })
+        payload["tags"] = {"tag": tag_list}
 
     return create_response(request, "vm", payload)
 
